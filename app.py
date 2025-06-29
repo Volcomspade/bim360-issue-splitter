@@ -10,52 +10,69 @@ st.set_page_config(page_title="Issue Report Splitter", page_icon="📄", layout=
 st.markdown("""
     <div style='text-align: center; padding-top: 10px;'>
         <h1 style='color: #2c3e50;'>📄 Issue Report Splitter</h1>
-        <p style='font-size: 17px; color: #555;'>Quickly split BIM 360 Issue or Build reports into individual PDFs with custom filenames.</p>
+        <p style='font-size: 17px; color: #555;'>Quickly split BIM 360 or ACC Build issue reports into individual PDFs with custom filenames.</p>
     </div>
     <hr>
 """, unsafe_allow_html=True)
 
-report_type = st.sidebar.radio("Select report type:", ["Issue Report", "Build Report"])
+st.sidebar.header("Options")
+auto_detect = st.sidebar.checkbox("Auto-detect report type", value=True)
+
+report_type = None
+if not auto_detect:
+    report_type = st.sidebar.radio("Select issue report type:", ["BIM 360", "ACC Build"])
 
 st.sidebar.header("Filename Options")
 format_choice = st.sidebar.selectbox("Choose filename format:", (
-    "IssueID_Location" if report_type == "Issue Report" else "BuildID_Location",
-    "EquipmentID_IssueID_Status" if report_type == "Issue Report" else "Status_BuildType_Location",
-    "Status_EquipmentID_Location" if report_type == "Issue Report" else "Location_Status_BuildType",
+    "IssueID_Location",
+    "EquipmentID_IssueID_Status",
+    "Status_EquipmentID_Location",
     "Custom"
 ))
 
 custom_format = ""
 if format_choice == "Custom":
-    placeholder_keys = "{IssueID}, {Location}, {Status}, {EquipmentID}" if report_type == "Issue Report" else "{BuildID}, {Location}, {Status}, {BuildType}"
-    custom_format = st.sidebar.text_input(f"Custom format using: {placeholder_keys}",
-                                          "{Status}_{IssueID}_{Location}" if report_type == "Issue Report" else "{BuildID}_{Location}_{Status}")
+    custom_format = st.sidebar.text_input("Custom format using: {IssueID}, {Location}, {Status}, {EquipmentID}",
+                                          "{Status}_{IssueID}_{Location}")
+
+def detect_report_type(first_page_text):
+    if re.search(r"#\d+:", first_page_text):
+        return "ACC Build"
+    elif re.search(r"ID\s+\d+.*Location Detail", first_page_text):
+        return "BIM 360"
+    return None
 
 def extract_entries_from_pdf(uploaded_pdf):
     doc = fitz.open(stream=uploaded_pdf.read(), filetype="pdf")
     segments = []
 
+    first_page_text = doc[0].get_text()
+    detected_type = detect_report_type(first_page_text) if auto_detect else report_type
+
+    if not detected_type:
+        st.warning("Could not detect report type. Please switch off auto-detect and choose manually.")
+        return None
+
     for i in range(len(doc)):
         text = doc[i].get_text()
         lines = text.splitlines()
 
-        # Handle new-style Autodesk Issue Report with #XX: format
-        header_match = re.match(r"^#(\d+):", lines[0].strip()) if lines else None
-        if report_type == "Issue Report" and header_match:
-            issue_id = header_match.group(1)
-            status = next((re.search(r"Status\s+(\w+)", l).group(1) for l in lines if re.search(r"Status\s+(\w+)", l)), "Unknown")
-            location = next((re.search(r"Location\s+(.*)", l).group(1).replace(".", "_") for l in lines if l.startswith("Location")), "Unknown")
-            equipment = next((re.search(r"Equipment ID\s+(\S+)", l).group(1) for l in lines if re.search(r"Equipment ID\s+(\S+)", l)), "NA")
-            segments.append({
-                "entry_id": issue_id,
-                "location": location,
-                "status": status,
-                "equipment_id": equipment,
-                "start": i
-            })
-            continue
+        if detected_type == "ACC Build":
+            header_match = re.match(r"^#(\d+):", lines[0].strip()) if lines else None
+            if header_match:
+                issue_id = header_match.group(1)
+                status = next((re.search(r"Status\s+(\w+)", l).group(1) for l in lines if re.search(r"Status\s+(\w+)", l)), "Unknown")
+                location = next((re.search(r"Location\s+(.*)", l).group(1).replace(".", "_") for l in lines if l.startswith("Location")), "Unknown")
+                equipment = next((re.search(r"Equipment ID\s+(\S+)", l).group(1) for l in lines if re.search(r"Equipment ID\s+(\S+)", l)), "NA")
+                segments.append({
+                    "entry_id": issue_id,
+                    "location": location,
+                    "status": status,
+                    "equipment_id": equipment,
+                    "start": i
+                })
 
-        if report_type == "Issue Report":
+        elif detected_type == "BIM 360":
             if "ID" in text and "Location Detail" in text:
                 id_match = re.search(r"ID\s+0*(\d+)", text)
                 loc_match = re.search(r"Location Detail\s+(T\d{1,3}\.BESS\.\d+)", text, re.IGNORECASE)
@@ -71,26 +88,8 @@ def extract_entries_from_pdf(uploaded_pdf):
                         "start": i
                     })
 
-        else:
-            for line in lines[:5]:
-                if re.match(r"Build Detail ID:\s+0*\d+", line):
-                    id_match = re.search(r"Build Detail ID\s+0*(\d+)", text)
-                    loc_match = re.search(r"Location\s+(T\d{1,3}\.BESS\.\d+)", text, re.IGNORECASE)
-                    status_match = re.search(r"Status\s+(\w+)", text)
-                    type_match = re.search(r"Build Type\s+([\w /&-]+)", text, re.IGNORECASE)
-
-                    if id_match and loc_match:
-                        segments.append({
-                            "entry_id": id_match.group(1),
-                            "location": loc_match.group(1).replace(".", "_"),
-                            "status": status_match.group(1) if status_match else "Unknown",
-                            "build_type": type_match.group(1).replace(" ", "_") if type_match else "Unknown",
-                            "start": i
-                        })
-                    break
-
     if not segments:
-        st.warning("No entries matched your selected report type. Try switching the report type in the sidebar.")
+        st.warning("No entries matched your selected or detected report type.")
         return None
 
     for idx in range(len(segments)):
@@ -104,38 +103,21 @@ def extract_entries_from_pdf(uploaded_pdf):
             pdf_bytes = entry_doc.write()
             entry_doc.close()
 
-            if report_type == "Issue Report":
-                if format_choice == "IssueID_Location":
-                    filename = f"Issue_{seg['entry_id']}_{seg['location']}.pdf"
-                elif format_choice == "EquipmentID_IssueID_Status":
-                    filename = f"{seg['equipment_id']}_Issue_{seg['entry_id']}_{seg['status']}.pdf"
-                elif format_choice == "Status_EquipmentID_Location":
-                    filename = f"{seg['status']}_{seg['equipment_id']}_{seg['location']}.pdf"
-                elif format_choice == "Custom":
-                    filename = custom_format.format(
-                        IssueID=seg['entry_id'],
-                        Location=seg['location'],
-                        Status=seg['status'],
-                        EquipmentID=seg['equipment_id']
-                    ) + ".pdf"
-                else:
-                    filename = f"Issue_{seg['entry_id']}_{seg['location']}.pdf"
+            if format_choice == "IssueID_Location":
+                filename = f"Issue_{seg['entry_id']}_{seg['location']}.pdf"
+            elif format_choice == "EquipmentID_IssueID_Status":
+                filename = f"{seg['equipment_id']}_Issue_{seg['entry_id']}_{seg['status']}.pdf"
+            elif format_choice == "Status_EquipmentID_Location":
+                filename = f"{seg['status']}_{seg['equipment_id']}_{seg['location']}.pdf"
+            elif format_choice == "Custom":
+                filename = custom_format.format(
+                    IssueID=seg['entry_id'],
+                    Location=seg['location'],
+                    Status=seg['status'],
+                    EquipmentID=seg['equipment_id']
+                ) + ".pdf"
             else:
-                if format_choice == "BuildID_Location":
-                    filename = f"Build_{seg['entry_id']}_{seg['location']}.pdf"
-                elif format_choice == "Status_BuildType_Location":
-                    filename = f"{seg['status']}_{seg['build_type']}_{seg['location']}.pdf"
-                elif format_choice == "Location_Status_BuildType":
-                    filename = f"{seg['location']}_{seg['status']}_{seg['build_type']}.pdf"
-                elif format_choice == "Custom":
-                    filename = custom_format.format(
-                        BuildID=seg['entry_id'],
-                        Location=seg['location'],
-                        Status=seg['status'],
-                        BuildType=seg['build_type']
-                    ) + ".pdf"
-                else:
-                    filename = f"Build_{seg['entry_id']}_{seg['location']}.pdf"
+                filename = f"Issue_{seg['entry_id']}_{seg['location']}.pdf"
 
             zipf.writestr(filename, pdf_bytes)
 
@@ -145,7 +127,7 @@ st.markdown("""
     <div style='background-color: #f9f9f9; padding: 20px; border-radius: 10px;'>
 """, unsafe_allow_html=True)
 
-uploaded_file = st.file_uploader("Choose your BIM 360 report PDF", type="pdf")
+uploaded_file = st.file_uploader("Choose your BIM 360 or ACC Build issue report PDF", type="pdf")
 
 st.markdown("""</div>""", unsafe_allow_html=True)
 
@@ -169,6 +151,6 @@ if uploaded_file:
 st.markdown("""
     <br><hr>
     <div style='text-align: center; color: #888;'>
-        <p style='font-size: 13px;'>Built for QA & Field Engineers • Streamlined PDF tools for BIM 360</p>
+        <p style='font-size: 13px;'>Built for QA & Field Engineers • Streamlined PDF tools for BIM 360 / ACC Build</p>
     </div>
 """, unsafe_allow_html=True)
