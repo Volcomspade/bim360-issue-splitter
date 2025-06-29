@@ -5,11 +5,11 @@ import io
 import re
 from pathlib import Path
 
-st.set_page_config(page_title="Issue Report Splitter", page_icon="📄", layout="centered")
+st.set_page_config(page_title="BIM 360 Issue Report Splitter", page_icon="📄", layout="centered")
 
 # --- Title and Header ---
 st.markdown("""
-    <h2 style='text-align: center; color: #333;'>📄 Issue Report Splitter</h2>
+    <h2 style='text-align: center; color: #333;'>📄 BIM 360 Issue Report Splitter</h2>
     <p style='text-align: center; font-size: 16px;'>Split your BIM 360 Issue or Build reports into separate PDFs.</p>
 """, unsafe_allow_html=True)
 
@@ -36,52 +36,44 @@ if format_choice == "Custom":
 def extract_entries_from_pdf(uploaded_pdf):
     doc = fitz.open(stream=uploaded_pdf.read(), filetype="pdf")
 
-    if report_type == "Issue Report":
-        id_pattern = re.compile(r"ID\s+0*(\d+)")
-        loc_pattern = re.compile(r"Location Detail\s+(T\d{1,3}\.BESS\.\d)", re.IGNORECASE)
-        status_pattern = re.compile(r"Status\s+(\w+)")
-        equip_pattern = re.compile(r"Equipment ID\s+(\S+)", re.IGNORECASE)
-    else:
-        id_pattern = re.compile(r"Build Detail ID\s+0*(\d+)")
-        loc_pattern = re.compile(r"Location\s+(T\d{1,3}\.BESS\.\d)", re.IGNORECASE)
-        status_pattern = re.compile(r"Status\s+(\w+)")
-        type_pattern = re.compile(r"Build Type\s+([\w /&-]+)", re.IGNORECASE)
-
     segments = []
     for i in range(len(doc)):
         text = doc[i].get_text()
-        id_match = id_pattern.search(text)
-        loc_match = loc_pattern.search(text)
 
-        if id_match and loc_match:
-            entry_id = id_match.group(1)
-            location = loc_match.group(1).replace(".", "_")
-            status_match = status_pattern.search(text)
-            status = status_match.group(1) if status_match else "Unknown"
+        if report_type == "Issue Report":
+            if "ID" in text and "Location Detail" in text:
+                id_match = re.search(r"ID\s+0*(\d+)", text)
+                loc_match = re.search(r"Location Detail\s+(T\d{1,3}\.BESS\.\d+)", text, re.IGNORECASE)
+                status_match = re.search(r"Status\s+(\w+)", text)
+                equip_match = re.search(r"Equipment ID\s+(\S+)", text, re.IGNORECASE)
 
-            if report_type == "Issue Report":
-                equip_match = equip_pattern.search(text)
-                equipment_id = equip_match.group(1) if equip_match else "NA"
-                segments.append({
-                    "entry_id": entry_id,
-                    "location": location,
-                    "status": status,
-                    "equipment_id": equipment_id,
-                    "start": i
-                })
-            else:
-                type_match = type_pattern.search(text)
-                build_type = type_match.group(1).replace(" ", "_") if type_match else "Unknown"
-                segments.append({
-                    "entry_id": entry_id,
-                    "location": location,
-                    "status": status,
-                    "build_type": build_type,
-                    "start": i
-                })
+                if id_match and loc_match:
+                    segments.append({
+                        "entry_id": id_match.group(1),
+                        "location": loc_match.group(1).replace(".", "_"),
+                        "status": status_match.group(1) if status_match else "Unknown",
+                        "equipment_id": equip_match.group(1) if equip_match else "NA",
+                        "start": i
+                    })
 
-    for idx, seg in enumerate(segments):
-        seg["end"] = segments[idx + 1]["start"] if idx + 1 < len(segments) else len(doc)
+        else:
+            if "Build Detail" in text and "Build Detail ID" in text:
+                id_match = re.search(r"Build Detail ID\s+0*(\d+)", text)
+                loc_match = re.search(r"Location\s+(T\d{1,3}\.BESS\.\d+)", text, re.IGNORECASE)
+                status_match = re.search(r"Status\s+(\w+)", text)
+                type_match = re.search(r"Build Type\s+([\w /&-]+)", text, re.IGNORECASE)
+
+                if id_match and loc_match:
+                    segments.append({
+                        "entry_id": id_match.group(1),
+                        "location": loc_match.group(1).replace(".", "_"),
+                        "status": status_match.group(1) if status_match else "Unknown",
+                        "build_type": type_match.group(1).replace(" ", "_") if type_match else "Unknown",
+                        "start": i
+                    })
+
+    for idx in range(len(segments)):
+        segments[idx]["end"] = segments[idx + 1]["start"] if idx + 1 < len(segments) else len(doc)
 
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w") as zipf:
