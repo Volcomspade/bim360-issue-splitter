@@ -3,16 +3,18 @@ import fitz  # PyMuPDF
 import zipfile
 import io
 import re
+import datetime
 
-st.set_page_config(page_title="BIM 360 Issue Report Splitter", page_icon="📄", layout="centered")
+st.set_page_config(page_title="Issue Report Splitter", page_icon="📄", layout="centered")
 
 # --- Title and Header ---
 st.markdown("""
-    <h2 style='text-align: center; color: #333;'>📄 BIM 360 Issue Report Splitter</h2>
-    <p style='text-align: center; font-size: 16px;'>Split your BIM 360 Issue or Build reports into separate PDFs.</p>
+    <div style='text-align: center; padding-top: 10px;'>
+        <h1 style='color: #2c3e50;'>📄 Issue Report Splitter</h1>
+        <p style='font-size: 17px; color: #555;'>Quickly split BIM 360 Issue or Build reports into individual PDFs with custom filenames.</p>
+    </div>
+    <hr>
 """, unsafe_allow_html=True)
-
-st.markdown("---")
 
 # --- Report Type ---
 report_type = st.sidebar.radio("Select report type:", ["Issue Report", "Build Report"])
@@ -38,6 +40,7 @@ def extract_entries_from_pdf(uploaded_pdf):
 
     for i in range(len(doc)):
         text = doc[i].get_text()
+        lines = text.splitlines()
 
         if report_type == "Issue Report":
             if "ID" in text and "Location Detail" in text:
@@ -56,7 +59,7 @@ def extract_entries_from_pdf(uploaded_pdf):
                     })
 
         else:
-            if "Build Detail" in text and "Build Detail ID" in text:
+            if lines and lines[0].strip().startswith("Build Detail") and "Build Detail ID" in text:
                 id_match = re.search(r"Build Detail ID\s+0*(\d+)", text)
                 loc_match = re.search(r"Location\s+(T\d{1,3}\.BESS\.\d+)", text, re.IGNORECASE)
                 status_match = re.search(r"Status\s+(\w+)", text)
@@ -133,10 +136,13 @@ if uploaded_file:
         zip_file = extract_entries_from_pdf(uploaded_file)
         st.success("✅ Done! Download your ZIP below.")
 
+        today_str = datetime.datetime.today().strftime("%Y-%m-%d")
+        zip_name = f"Issue Report - {today_str}.zip"
+
         st.download_button(
             label="📦 Download Split Reports ZIP",
             data=zip_file.getvalue(),
-            file_name="Split_Reports.zip",
+            file_name=zip_name,
             mime="application/zip",
             use_container_width=True
         )
@@ -144,5 +150,7 @@ if uploaded_file:
 # --- Footer ---
 st.markdown("""
     <br><hr>
-    <p style='text-align: center; font-size: 13px;'>Made with ❤️ to speed up your QA and build documentation.</p>
+    <div style='text-align: center; color: #888;'>
+        <p style='font-size: 13px;'>Built for QA & Field Engineers • Streamlined PDF tools for BIM 360</p>
+    </div>
 """, unsafe_allow_html=True)
