@@ -28,8 +28,7 @@ def extract_bim360_entries(file_bytes, filename_format):
 
     for i, page in enumerate(doc):
         text = page.get_text()
-        lines = text.split("
-")
+        lines = text.split("\n")
         issue_id = next((line for line in lines if line.strip().isdigit()), f"Issue{i+1}")
         location = next((line for line in lines if "." in line and len(line) < 30), "Unknown")
         filename = filename_format.format(IssueID=issue_id.strip(), Location=location.replace(" ", "_"))
