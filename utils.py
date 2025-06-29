@@ -4,7 +4,7 @@ import io
 import zipfile
 
 
-def extract_entries_from_pdf(uploaded_file):
+def extract_entries_from_pdf(uploaded_file, auto_detect=False):
     reader = PdfReader(uploaded_file)
     segments = []
     doc = list(reader.pages)
