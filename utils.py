@@ -59,8 +59,7 @@ def extract_acc_build_entries(file_bytes, filename_format):
     for seg in segments:
         start, end = seg["start"], seg["end"]
         text = doc[start].get_text()
-        lines = text.split("
-")
+        lines = text.split("\n")
         issue_id = next((l for l in lines if l.strip().startswith("#")), "#Unknown").strip("#")
         location = next((l for l in lines if ">" in l or "-" in l), "Unknown")
         filename = filename_format.format(IssueID=issue_id.strip(), LocationDetail=location.replace(" ", "_"))
