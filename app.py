@@ -1,44 +1,41 @@
-
 import streamlit as st
-import tempfile
-import datetime
-from utils import detect_report_type, extract_bim_issues, extract_acc_issues, split_pdf_by_issues
+import zipfile
+from io import BytesIO
+from utils import split_bim360_report
+import pandas as pd
+from datetime import datetime
 
 st.set_page_config(page_title="Issue Report Splitter", layout="wide")
+
 st.title("📄 Issue Report Splitter")
 
-uploaded_file = st.file_uploader("Upload your Issue Report PDF", type=["pdf"])
+uploaded_file = st.file_uploader("Upload a BIM 360 issue report PDF", type="pdf")
 
 if uploaded_file:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-        tmp.write(uploaded_file.read())
-        pdf_path = tmp.name
+    st.success("PDF uploaded. Attempting to identify and parse issues...")
 
-    report_type = detect_report_type(pdf_path)
-    st.success(f"Detected Report Type: **{report_type}**")
+    filename_format = st.selectbox("Filename format:", [
+        "{IssueID}_{Location}_{LocationDetail}_{EquipmentID}",
+        "{IssueID}_{Location}",
+        "{IssueID}"
+    ])
 
-    if report_type == "BIM 360":
-        filename_format = st.selectbox("Filename format", [
-            "Issue_{IssueID}",
-            "BIM360_{IssueID}",
-        ])
-        doc, issue_ranges = extract_bim_issues(pdf_path)
+    if st.button("Split Report"):
+        with st.spinner("Processing..."):
+            files, summary = split_bim360_report(uploaded_file, filename_format)
 
-    elif report_type == "ACC Build":
-        filename_format = st.selectbox("Filename format", [
-            "Issue_{IssueID}",
-            "ACC_{IssueID}",
-        ])
-        doc, issue_ranges = extract_acc_issues(pdf_path)
+            if not files:
+                st.error("No issues found or failed to split.")
+            else:
+                zip_buffer = BytesIO()
+                with zipfile.ZipFile(zip_buffer, "w") as zipf:
+                    for name, buffer in files:
+                        zipf.writestr(name, buffer.getvalue())
+                zip_buffer.seek(0)
 
-    else:
-        st.error("Unknown report format.")
-        st.stop()
+                today = datetime.today().strftime("%Y-%m-%d")
+                st.download_button("📦 Download ZIP", zip_buffer, file_name=f"Issue Report - {today}.zip")
 
-    if st.button("Split Issues"):
-        with st.spinner("Splitting issues..."):
-            summary_df, zip_buffer = split_pdf_by_issues(doc, issue_ranges, filename_format)
-            date_str = datetime.date.today().isoformat()
-            zip_filename = f"Issue Report - {date_str}.zip"
-            st.download_button("Download ZIP", zip_buffer.getvalue(), file_name=zip_filename, mime="application/zip")
-            st.dataframe(summary_df)
+                if summary:
+                    st.subheader("📋 Summary Table")
+                    st.dataframe(pd.DataFrame(summary))
