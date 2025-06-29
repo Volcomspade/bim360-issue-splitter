@@ -7,7 +7,6 @@ import datetime
 
 st.set_page_config(page_title="Issue Report Splitter", page_icon="📄", layout="centered")
 
-# --- Title and Header ---
 st.markdown("""
     <div style='text-align: center; padding-top: 10px;'>
         <h1 style='color: #2c3e50;'>📄 Issue Report Splitter</h1>
@@ -16,10 +15,8 @@ st.markdown("""
     <hr>
 """, unsafe_allow_html=True)
 
-# --- Report Type ---
 report_type = st.sidebar.radio("Select report type:", ["Issue Report", "Build Report"])
 
-# --- Filename Format Selection ---
 st.sidebar.header("Filename Options")
 format_choice = st.sidebar.selectbox("Choose filename format:", (
     "IssueID_Location" if report_type == "Issue Report" else "BuildID_Location",
@@ -40,6 +37,7 @@ def extract_entries_from_pdf(uploaded_pdf):
 
     for i in range(len(doc)):
         text = doc[i].get_text()
+        lines = text.splitlines()
 
         if report_type == "Issue Report":
             if "ID" in text and "Location Detail" in text:
@@ -58,20 +56,22 @@ def extract_entries_from_pdf(uploaded_pdf):
                     })
 
         else:
-            if "build detail" in text.lower() and "build detail id" in text.lower():
-                id_match = re.search(r"Build Detail ID\s+0*(\d+)", text, re.IGNORECASE)
-                loc_match = re.search(r"Location\s+(T\d{1,3}\.BESS\.\d+)", text, re.IGNORECASE)
-                status_match = re.search(r"Status\s+(\w+)", text)
-                type_match = re.search(r"Build Type\s+([\w /&-]+)", text, re.IGNORECASE)
+            for line in lines[:5]:
+                if re.match(r"Build Detail ID:\s+0*\d+", line):
+                    id_match = re.search(r"Build Detail ID\s+0*(\d+)", text)
+                    loc_match = re.search(r"Location\s+(T\d{1,3}\.BESS\.\d+)", text, re.IGNORECASE)
+                    status_match = re.search(r"Status\s+(\w+)", text)
+                    type_match = re.search(r"Build Type\s+([\w /&-]+)", text, re.IGNORECASE)
 
-                if id_match and loc_match:
-                    segments.append({
-                        "entry_id": id_match.group(1),
-                        "location": loc_match.group(1).replace(".", "_"),
-                        "status": status_match.group(1) if status_match else "Unknown",
-                        "build_type": type_match.group(1).replace(" ", "_") if type_match else "Unknown",
-                        "start": i
-                    })
+                    if id_match and loc_match:
+                        segments.append({
+                            "entry_id": id_match.group(1),
+                            "location": loc_match.group(1).replace(".", "_"),
+                            "status": status_match.group(1) if status_match else "Unknown",
+                            "build_type": type_match.group(1).replace(" ", "_") if type_match else "Unknown",
+                            "start": i
+                        })
+                    break
 
     for idx in range(len(segments)):
         segments[idx]["end"] = segments[idx + 1]["start"] if idx + 1 < len(segments) else len(doc)
@@ -121,7 +121,6 @@ def extract_entries_from_pdf(uploaded_pdf):
 
     return zip_buffer
 
-# --- Upload Section ---
 st.markdown("""
     <div style='background-color: #f9f9f9; padding: 20px; border-radius: 10px;'>
 """, unsafe_allow_html=True)
@@ -146,7 +145,6 @@ if uploaded_file:
             use_container_width=True
         )
 
-# --- Footer ---
 st.markdown("""
     <br><hr>
     <div style='text-align: center; color: #888;'>
