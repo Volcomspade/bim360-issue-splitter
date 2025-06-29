@@ -89,8 +89,12 @@ def extract_entries_from_pdf(uploaded_pdf):
                         })
                     break
 
+    if not segments:
+        st.warning("No entries matched your selected report type. Try switching the report type in the sidebar.")
+        return None
+
     for idx in range(len(segments)):
-        segments[idx]["end"] = segments[idx + 1]["start"] if idx + 1 < len(doc) else len(doc)
+        segments[idx]["end"] = segments[idx + 1]["start"] if idx + 1 < len(segments) else len(doc)
 
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w") as zipf:
@@ -148,18 +152,19 @@ st.markdown("""</div>""", unsafe_allow_html=True)
 if uploaded_file:
     with st.spinner("🔄 Splitting entries and processing your file..."):
         zip_file = extract_entries_from_pdf(uploaded_file)
-        st.success("✅ Done! Download your ZIP below.")
+        if zip_file:
+            st.success("✅ Done! Download your ZIP below.")
 
-        today_str = datetime.datetime.today().strftime("%Y-%m-%d")
-        zip_name = f"Issue Report - {today_str}.zip"
+            today_str = datetime.datetime.today().strftime("%Y-%m-%d")
+            zip_name = f"Issue Report - {today_str}.zip"
 
-        st.download_button(
-            label="📦 Download Split Reports ZIP",
-            data=zip_file.getvalue(),
-            file_name=zip_name,
-            mime="application/zip",
-            use_container_width=True
-        )
+            st.download_button(
+                label="📦 Download Split Reports ZIP",
+                data=zip_file.getvalue(),
+                file_name=zip_name,
+                mime="application/zip",
+                use_container_width=True
+            )
 
 st.markdown("""
     <br><hr>
