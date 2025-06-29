@@ -14,28 +14,33 @@ uploaded_file = st.file_uploader("Upload a BIM 360 issue report PDF", type="pdf"
 if uploaded_file:
     st.success("PDF uploaded. Attempting to identify and parse issues...")
 
-    filename_format = st.selectbox("Filename format:", [
-        "{IssueID}_{Location}_{LocationDetail}_{EquipmentID}",
-        "{IssueID}_{Location}",
-        "{IssueID}"
-    ])
+    st.subheader("🔠 Customize Filename Format")
 
-    if st.button("Split Report"):
-        with st.spinner("Processing..."):
-            files, summary = split_bim360_report(uploaded_file, filename_format)
+    available_fields = ["IssueID", "Location", "LocationDetail", "EquipmentID"]
+    chosen_fields = st.multiselect("Select fields to include in filename:", available_fields, default=available_fields)
 
-            if not files:
-                st.error("No issues found or failed to split.")
-            else:
-                zip_buffer = BytesIO()
-                with zipfile.ZipFile(zip_buffer, "w") as zipf:
-                    for name, buffer in files:
-                        zipf.writestr(name, buffer.getvalue())
-                zip_buffer.seek(0)
+    separator = st.selectbox("Choose separator:", ["_", "-", " "], index=0)
 
-                today = datetime.today().strftime("%Y-%m-%d")
-                st.download_button("📦 Download ZIP", zip_buffer, file_name=f"Issue Report - {today}.zip")
+    if chosen_fields:
+        filename_format = separator.join([f"{{{field}}}" for field in chosen_fields])
+        st.markdown(f"**Filename format preview:** `{filename_format}.pdf`")
 
-                if summary:
-                    st.subheader("📋 Summary Table")
-                    st.dataframe(pd.DataFrame(summary))
+        if st.button("Split Report"):
+            with st.spinner("Processing..."):
+                files, summary = split_bim360_report(uploaded_file, filename_format)
+
+                if not files:
+                    st.error("No issues found or failed to split.")
+                else:
+                    zip_buffer = BytesIO()
+                    with zipfile.ZipFile(zip_buffer, "w") as zipf:
+                        for name, buffer in files:
+                            zipf.writestr(name, buffer.getvalue())
+                    zip_buffer.seek(0)
+
+                    today = datetime.today().strftime("%Y-%m-%d")
+                    st.download_button("📦 Download ZIP", zip_buffer, file_name=f"Issue Report - {today}.zip")
+
+                    if summary:
+                        st.subheader("📋 Summary Table")
+                        st.dataframe(pd.DataFrame(summary))
