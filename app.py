@@ -40,7 +40,6 @@ def extract_entries_from_pdf(uploaded_pdf):
 
     for i in range(len(doc)):
         text = doc[i].get_text()
-        lines = text.splitlines()
 
         if report_type == "Issue Report":
             if "ID" in text and "Location Detail" in text:
@@ -59,8 +58,8 @@ def extract_entries_from_pdf(uploaded_pdf):
                     })
 
         else:
-            if lines and lines[0].strip().startswith("Build Detail") and "Build Detail ID" in text:
-                id_match = re.search(r"Build Detail ID\s+0*(\d+)", text)
+            if "build detail" in text.lower() and "build detail id" in text.lower():
+                id_match = re.search(r"Build Detail ID\s+0*(\d+)", text, re.IGNORECASE)
                 loc_match = re.search(r"Location\s+(T\d{1,3}\.BESS\.\d+)", text, re.IGNORECASE)
                 status_match = re.search(r"Status\s+(\w+)", text)
                 type_match = re.search(r"Build Type\s+([\w /&-]+)", text, re.IGNORECASE)
