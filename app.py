@@ -1,49 +1,44 @@
 
 import streamlit as st
-from datetime import datetime
-from utils import (
-    detect_report_type,
-    extract_bim360_entries,
-    extract_acc_build_entries,
-    get_filename_formats
-)
-import io
-import zipfile
+import tempfile
+import datetime
+from utils import detect_report_type, extract_bim_issues, extract_acc_issues, split_pdf_by_issues
 
-st.set_page_config(page_title="Issue Report Splitter", layout="centered")
+st.set_page_config(page_title="Issue Report Splitter", layout="wide")
 st.title("📄 Issue Report Splitter")
-st.markdown("Upload a BIM 360 or ACC Build issue report PDF to split each issue into its own file.")
 
-uploaded_file = st.file_uploader("Choose a PDF report", type="pdf")
+uploaded_file = st.file_uploader("Upload your Issue Report PDF", type=["pdf"])
 
 if uploaded_file:
-    with st.spinner("Detecting report type..."):
-        uploaded_bytes = uploaded_file.read()
-        report_type = detect_report_type(uploaded_bytes)
-    
-    if report_type:
-        st.success(f"Detected Report Type: {report_type}")
-        format_options = get_filename_formats(report_type)
-        filename_format = st.selectbox("Choose filename format", format_options)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        tmp.write(uploaded_file.read())
+        pdf_path = tmp.name
 
-        if st.button("Split Report"):
-            with st.spinner("Processing and splitting the report..."):
-                if report_type == "BIM 360":
-                    summary_data, zip_buffer = extract_bim360_entries(uploaded_bytes, filename_format)
-                else:
-                    summary_data, zip_buffer = extract_acc_build_entries(uploaded_bytes, filename_format)
-            
-            if summary_data and zip_buffer:
-                st.success(f"✅ {len(summary_data)} issues extracted!")
-                st.download_button(
-                    label="📁 Download ZIP",
-                    data=zip_buffer.getvalue(),
-                    file_name="split_issues.zip",
-                    mime="application/zip"
-                )
-                st.subheader("🗂️ Summary")
-                st.dataframe(summary_data)
-            else:
-                st.error("⚠️ No valid entries found. Check the report type or file contents.")
+    report_type = detect_report_type(pdf_path)
+    st.success(f"Detected Report Type: **{report_type}**")
+
+    if report_type == "BIM 360":
+        filename_format = st.selectbox("Filename format", [
+            "Issue_{IssueID}",
+            "BIM360_{IssueID}",
+        ])
+        doc, issue_ranges = extract_bim_issues(pdf_path)
+
+    elif report_type == "ACC Build":
+        filename_format = st.selectbox("Filename format", [
+            "Issue_{IssueID}",
+            "ACC_{IssueID}",
+        ])
+        doc, issue_ranges = extract_acc_issues(pdf_path)
+
     else:
-        st.error("❌ Could not determine report type. Make sure this is a valid BIM 360 or ACC Build issue report.")
+        st.error("Unknown report format.")
+        st.stop()
+
+    if st.button("Split Issues"):
+        with st.spinner("Splitting issues..."):
+            summary_df, zip_buffer = split_pdf_by_issues(doc, issue_ranges, filename_format)
+            date_str = datetime.date.today().isoformat()
+            zip_filename = f"Issue Report - {date_str}.zip"
+            st.download_button("Download ZIP", zip_buffer.getvalue(), file_name=zip_filename, mime="application/zip")
+            st.dataframe(summary_df)
