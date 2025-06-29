@@ -39,6 +39,22 @@ def extract_entries_from_pdf(uploaded_pdf):
         text = doc[i].get_text()
         lines = text.splitlines()
 
+        # Handle new-style Autodesk Issue Report with #XX: format
+        header_match = re.match(r"^#(\d+):", lines[0].strip()) if lines else None
+        if report_type == "Issue Report" and header_match:
+            issue_id = header_match.group(1)
+            status = next((re.search(r"Status\s+(\w+)", l).group(1) for l in lines if re.search(r"Status\s+(\w+)", l)), "Unknown")
+            location = next((re.search(r"Location\s+(.*)", l).group(1).replace(".", "_") for l in lines if l.startswith("Location")), "Unknown")
+            equipment = next((re.search(r"Equipment ID\s+(\S+)", l).group(1) for l in lines if re.search(r"Equipment ID\s+(\S+)", l)), "NA")
+            segments.append({
+                "entry_id": issue_id,
+                "location": location,
+                "status": status,
+                "equipment_id": equipment,
+                "start": i
+            })
+            continue
+
         if report_type == "Issue Report":
             if "ID" in text and "Location Detail" in text:
                 id_match = re.search(r"ID\s+0*(\d+)", text)
@@ -74,7 +90,7 @@ def extract_entries_from_pdf(uploaded_pdf):
                     break
 
     for idx in range(len(segments)):
-        segments[idx]["end"] = segments[idx + 1]["start"] if idx + 1 < len(segments) else len(doc)
+        segments[idx]["end"] = segments[idx + 1]["start"] if idx + 1 < len(doc) else len(doc)
 
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w") as zipf:
