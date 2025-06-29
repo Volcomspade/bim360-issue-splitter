@@ -10,12 +10,12 @@ def extract_entries_from_pdf(file, auto_detect=True, format_choice="Custom", cus
     segments = []
 
     for i, page in enumerate(doc):
-        text = page.extract_text()
-        if not text:
-            continue
+    text = page.extract_text()
+    if not text:
+        continue
 
-        if "Issue #" in text or re.search(r"Issue\s+#?\d+", text):
-            segments.append({"start": i, "text": text})
+    if "Issue #" in text or re.search(r"Issue\s+#?\d+", text):
+        segments.append({"start": i, "text": text})
 
     if not segments:
         return None, None
