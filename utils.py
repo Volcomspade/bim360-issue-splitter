@@ -14,7 +14,8 @@ def extract_entries_from_pdf(file, auto_detect=True, format_choice="Custom", cus
     if not text:
         continue
 
-    if "Issue #" in text or re.search(r"Issue\s+#?\d+", text):
+   first_line = text.strip().splitlines()[0] if text.strip() else ""
+    if "Issue #" in text or re.search(r"Issue\s+#?\d+", text) or re.match(r"^#\d+", first_line):
         segments.append({"start": i, "text": text})
 
     if not segments:
