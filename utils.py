@@ -1,67 +1,97 @@
+import fitz  # PyMuPDF
 import io
-import re
 import zipfile
-from PyPDF2 import PdfReader, PdfWriter
+import pandas as pd
+import re
 
+def extract_entries_from_pdf(pdf_file, report_type="auto", filename_format="auto"):
+    doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
+    text = ""
+    for page in doc:
+        text += page.get_text()
 
-def extract_entries_from_pdf(file, format_choice="Custom", custom_format="{IssueID}_{LocationDetail}"):
-    pdf = PdfReader(file)
-    doc = pdf.pages
-    segments = []
+    # Detect report type if needed
+    if report_type == "auto":
+        if re.search(r"ACC Build Issue Report", text, re.IGNORECASE) or re.search(r"#\d{2}", text):
+            report_type = "acc"
+        elif re.search(r"Issue ID", text) and re.search(r"Location Detail", text):
+            report_type = "bim360"
+        else:
+            return None, None
 
-    for i, page in enumerate(doc):
-        text = page.extract_text()
-        if not text:
-            continue
-
-        # Detect segment starts by ID pattern (BIM 360 and ACC Build)
-        if re.search(r"Issue\s+#?\d+", text) or re.search(r"#\d+", text):
-            segments.append({"start": i, "text": text})
-
-    if not segments:
+    if report_type == "bim360":
+        return extract_bim360_entries(doc, filename_format)
+    elif report_type == "acc":
+        return extract_acc_entries(doc, filename_format)
+    else:
         return None, None
 
-    for idx in range(len(segments)):
-        segments[idx]["end"] = segments[idx + 1]["start"] if idx + 1 < len(doc) else len(doc)
+def extract_bim360_entries(doc, filename_format):
+    text_pages = [page.get_text() for page in doc]
+    segments = []
+
+    for i, text in enumerate(text_pages):
+        if "Issue ID" in text and "Location Detail" in text:
+            segments.append({"start": i})
+
+    for i in range(len(segments)):
+        segments[i]["end"] = segments[i + 1]["start"] if i + 1 < len(segments) else len(doc)
 
     zip_buffer = io.BytesIO()
     zip_archive = zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED)
+    summary = []
 
-    summary_data = []
-
-    for seg in segments:
-        text = seg["text"]
-        start, end = seg["start"], seg["end"]
-
-        # Extract Issue ID and Location info (handle both formats)
-        issue_id_match = re.search(r"Issue\s+#?(\d+)|#(\d+)", text)
-        location_match = re.search(r"Location\s*:\s*(.+?)\n", text)
-
-        issue_id = issue_id_match.group(1) if issue_id_match and issue_id_match.group(1) else issue_id_match.group(2) if issue_id_match else "Unknown"
+    for i, s in enumerate(segments):
+        issue_id_match = re.search(r"Issue ID[:\s]+([^\n]+)", text_pages[s["start"]])
+        location_match = re.search(r"Location Detail[:\s]+([^\n]+)", text_pages[s["start"]])
+        issue_id = issue_id_match.group(1).strip() if issue_id_match else f"Issue_{i+1}"
         location = location_match.group(1).strip() if location_match else "Unknown"
 
-        # Format filename with user-defined format
-        try:
-            filename = custom_format.format(IssueID=issue_id, LocationDetail=location)
-        except KeyError:
-            filename = f"Issue_{issue_id or 'Unknown'}"
-
-        writer = PdfWriter()
-        for i in range(start, end):
-            writer.add_page(doc[i])
-
+        filename = f"{issue_id}_{location}".replace(" ", "_").replace("/", "-") + ".pdf"
         pdf_bytes = io.BytesIO()
-        writer.write(pdf_bytes)
-        pdf_bytes.seek(0)
+        issue_doc = fitz.open()
+        for j in range(s["start"], s["end"]):
+            issue_doc.insert_pdf(doc, from_page=j, to_page=j)
+        issue_doc.save(pdf_bytes)
+        issue_doc.close()
+        zip_archive.writestr(filename, pdf_bytes.getvalue())
 
-        zip_archive.writestr(f"{filename}.pdf", pdf_bytes.read())
-
-        summary_data.append({
-            "Issue ID": issue_id,
-            "Location": location,
-            "Pages": f"{start + 1}–{end}"
-        })
+        summary.append({"Issue ID": issue_id, "Location": location, "Pages": f"{s['start']+1}–{s['end']}"})
 
     zip_archive.close()
     zip_buffer.seek(0)
-    return summary_data, zip_buffer
+    return pd.DataFrame(summary), zip_buffer
+
+def extract_acc_entries(doc, filename_format):
+    text_pages = [page.get_text() for page in doc]
+    segments = []
+
+    for i, text in enumerate(text_pages):
+        if re.match(r"#\d{2,}", text.strip().splitlines()[0]):
+            segments.append({"start": i})
+
+    for i in range(len(segments)):
+        segments[i]["end"] = segments[i + 1]["start"] if i + 1 < len(segments) else len(doc)
+
+    zip_buffer = io.BytesIO()
+    zip_archive = zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED)
+    summary = []
+
+    for i, s in enumerate(segments):
+        first_line = text_pages[s["start"]].strip().splitlines()[0]
+        issue_id = first_line.strip().lstrip("#").strip() or f"ACC_{i+1}"
+
+        filename = f"{issue_id}.pdf"
+        pdf_bytes = io.BytesIO()
+        issue_doc = fitz.open()
+        for j in range(s["start"], s["end"]):
+            issue_doc.insert_pdf(doc, from_page=j, to_page=j)
+        issue_doc.save(pdf_bytes)
+        issue_doc.close()
+        zip_archive.writestr(filename, pdf_bytes.getvalue())
+
+        summary.append({"Issue ID": issue_id, "Location": "Unknown", "Pages": f"{s['start']+1}–{s['end']}"})
+
+    zip_archive.close()
+    zip_buffer.seek(0)
+    return pd.DataFrame(summary), zip_buffer
