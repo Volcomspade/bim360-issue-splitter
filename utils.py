@@ -3,61 +3,72 @@ import io
 import zipfile
 from PyPDF2 import PdfReader, PdfWriter
 
-def extract_entries_from_pdf(file):
-    pdf = PdfReader(file)
-    doc = pdf.pages
+def extract_entries_from_pdf(file_path):
+    reader = PdfReader(file_path)
+    pages = reader.pages
+
+    # Auto-detect report format
+    first_text = pages[0].extract_text() or ""
+    is_bim360 = "Issue #" in first_text or "Location Detail:" in first_text
+    is_acc_build = re.search(r"#\d{2,}", first_text) and "Location:" in first_text
+
     segments = []
 
-    for i, page in enumerate(doc):
-        text = page.extract_text()
+    for i, p in enumerate(pages):
+        text = p.extract_text()
         if not text:
             continue
 
-        # Detect format
-        if "Issue #" in text or re.search(r"Issue\s*#?\d+", text):
-            segments.append({"start": i, "text": text})
+        if is_bim360:
+            if "Issue #" in text or "Location Detail:" in text:
+                segments.append({"start": i, "text": text})
+        elif is_acc_build:
+            if re.search(r"#\d{2,}", text) and "Location:" in text:
+                segments.append({"start": i, "text": text})
 
     if not segments:
         return None, None
 
+    # Define end pages
     for idx in range(len(segments)):
-        segments[idx]["end"] = segments[idx + 1]["start"] if idx + 1 < len(doc) else len(doc)
+        segments[idx]["end"] = segments[idx + 1]["start"] if idx + 1 < len(pages) else len(pages)
 
     zip_buffer = io.BytesIO()
-    zip_archive = zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED)
-
-    summary_data = []
+    zipf = zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED)
+    summary = []
 
     for seg in segments:
-        text = seg["text"]
+        txt = seg["text"]
         start, end = seg["start"], seg["end"]
 
-        issue_id_match = re.search(r"Issue\s*#?(\d+)", text)
-        location_match = re.search(r"Location\s*:\s*(.+?)\n", text)
-        equip_match = re.search(r"Equipment ID\s*:\s*(.+?)\n", text)
+        id_match = re.search(r"Issue\s*#?(\d+)", txt) or re.search(r"#(\d+)", txt)
+        loc_match = re.search(r"Location(?: Detail)?:\s*(.+)", txt)
+        equip_match = re.search(r"Equipment ID:\s*(.+)", txt)
 
-        issue_id = issue_id_match.group(1) if issue_id_match else f"{start+1}"
-        location = location_match.group(1).strip() if location_match else "Unknown_Location"
-        equip_id = equip_match.group(1).strip() if equip_match else "Unknown_Equip"
+        issue_id = id_match.group(1).strip() if id_match else f"{start+1}"
+        location = loc_match.group(1).strip().replace(" ", "_") if loc_match else ""
+        equipment = equip_match.group(1).strip() if equip_match else ""
 
-        filename = f"Issue_{issue_id}_{location.replace(' ', '_')}_{equip_id.replace(' ', '_')}.pdf"
-        filename = filename.replace("/", "-")
+        filename = f"Issue_{issue_id}"
+        if location:
+            filename += f"_{location}"
+        filename += ".pdf"
 
         writer = PdfWriter()
-        for i in range(start, end):
-            writer.add_page(pdf.pages[i])
+        for page_num in range(start, end):
+            writer.add_page(pages[page_num])
 
-        output = io.BytesIO()
-        writer.write(output)
-        zip_archive.writestr(filename, output.getvalue())
+        tmp = io.BytesIO()
+        writer.write(tmp)
+        zipf.writestr(filename, tmp.getvalue())
 
-        summary_data.append({
-            "Issue ID": issue_id,
-            "Location": location,
-            "Equipment ID": equip_id,
-            "Pages": f"{start+1}-{end}"
+        summary.append({
+            "file_name": filename,
+            "issue_id": issue_id,
+            "location": location,
+            "equipment_id": equipment
         })
 
-    zip_archive.close()
+    zipf.close()
     zip_buffer.seek(0)
-    return summary_data, zip_buffer
+    return zip_buffer, summary
