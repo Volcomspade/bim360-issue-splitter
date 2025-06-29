@@ -7,6 +7,15 @@ import datetime
 
 st.set_page_config(page_title="Issue Report Splitter", page_icon="📄", layout="centered")
 
+if "theme_mode" not in st.session_state:
+    st.session_state.theme_mode = "Dark"
+
+mode = st.sidebar.radio("Theme Mode", ["Dark", "Light"], index=0 if st.session_state.theme_mode == "Dark" else 1)
+st.session_state.theme_mode = mode
+
+if mode == "Light":
+    st.markdown("""<style>body, .stApp { background-color: #fafafa; color: #222; }</style>""", unsafe_allow_html=True)
+
 st.markdown("""
     <div style='text-align: center; padding-top: 10px;'>
         <h1 style='color: #2c3e50;'>📄 Issue Report Splitter</h1>
@@ -36,13 +45,18 @@ if format_choice == "Custom":
                                           "{Status}_{IssueID}_{Location}")
 
 def detect_report_type(doc):
-    for i in range(min(5, len(doc))):
+    max_pages = min(10, len(doc))
+    bim360_score = 0
+    accbuild_score = 0
+
+    for i in range(max_pages):
         text = doc[i].get_text()
-        if re.search(r"#\d+:", text):
-            return "ACC Build"
-        elif re.search(r"ID\s+\d+.*Location Detail", text):
-            return "BIM 360"
-    return None
+        if re.search(r"ID\s+\d+", text) and "Location Detail" in text:
+            bim360_score += 1
+        if len(re.findall(r"#\d+:", text)) >= 1:
+            accbuild_score += 1
+
+    return "BIM 360" if bim360_score > accbuild_score else "ACC Build" if accbuild_score > 0 else None
 
 def extract_entries_from_pdf(uploaded_pdf):
     doc = fitz.open(stream=uploaded_pdf.read(), filetype="pdf")
@@ -52,7 +66,7 @@ def extract_entries_from_pdf(uploaded_pdf):
 
     if not detected_type:
         st.warning("Could not detect report type. Please switch off auto-detect and choose manually.")
-        return None
+        return None, None
 
     for i in range(len(doc)):
         text = doc[i].get_text()
@@ -91,10 +105,10 @@ def extract_entries_from_pdf(uploaded_pdf):
 
     if not segments:
         st.warning("No entries matched your selected or detected report type.")
-        return None
+        return None, None
 
     for idx in range(len(segments)):
-        segments[idx]["end"] = segments[idx + 1]["start"] if idx + 1 < len(segments) else len(doc)
+        segments[idx]["end"] = segments[idx + 1]["start"] if idx + 1 < len(doc) else len(doc)
 
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w") as zipf:
@@ -122,7 +136,7 @@ def extract_entries_from_pdf(uploaded_pdf):
 
             zipf.writestr(filename, pdf_bytes)
 
-    return zip_buffer
+    return zip_buffer, segments
 
 st.markdown("""
     <div style='background-color: #f9f9f9; padding: 20px; border-radius: 10px;'>
@@ -134,7 +148,7 @@ st.markdown("""</div>""", unsafe_allow_html=True)
 
 if uploaded_file:
     with st.spinner("🔄 Splitting entries and processing your file..."):
-        zip_file = extract_entries_from_pdf(uploaded_file)
+        zip_file, summary_data = extract_entries_from_pdf(uploaded_file)
         if zip_file:
             st.success("✅ Done! Download your ZIP below.")
 
@@ -148,6 +162,18 @@ if uploaded_file:
                 mime="application/zip",
                 use_container_width=True
             )
+
+            st.markdown("---")
+            st.markdown("### 📝 Summary of Split Reports")
+            st.dataframe([
+                {
+                    "Issue ID": s["entry_id"],
+                    "Status": s["status"],
+                    "Location": s["location"],
+                    "Equipment ID": s["equipment_id"]
+                }
+                for s in summary_data
+            ])
 
 st.markdown("""
     <br><hr>
