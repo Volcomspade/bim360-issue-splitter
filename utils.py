@@ -1,3 +1,4 @@
+
 import re
 import io
 import zipfile
@@ -13,8 +14,7 @@ def extract_entries_from_pdf(file):
         if not text:
             continue
 
-        # Match both BIM 360 ("Issue #123") and ACC Build ("#123") formats
-        if re.search(r"(Issue\s*#?\d+|#\d{2,})", text):
+        if re.search(r"#\d{1,5}\s", text) or re.search(r"Issue\s*ID:\s*\d+", text) or re.search(r"ID\s*\d{6}", text):
             segments.append({"start": i, "text": text})
 
     if not segments:
@@ -31,15 +31,16 @@ def extract_entries_from_pdf(file):
         text = seg["text"]
         start, end = seg["start"], seg["end"]
 
-        # Extract issue ID
-        issue_id_match = re.search(r"(Issue\s*#?|#)(\d+)", text)
-        issue_id = issue_id_match.group(2) if issue_id_match else f"page_{start+1}"
+        issue_id_match = (
+            re.search(r"#(\d{1,5})\s", text)
+            or re.search(r"Issue\s*ID:\s*(\d+)", text)
+            or re.search(r"ID\s*(\d{6})", text)
+        )
+        location_match = re.search(r"Location(?: Detail)?:\s*(.+?)(?:\n|$)", text)
 
-        # Extract location
-        location_match = re.search(r"Location\s*:(.*?)\n", text)
-        location = location_match.group(1).strip().replace("/", "-") if location_match else "Unknown"
+        issue_id = issue_id_match.group(1) if issue_id_match else f"page_{start+1}"
+        location = location_match.group(1).strip().replace("/", "-").replace("\\", "-") if location_match else "Unknown"
 
-        # Create issue PDF
         writer = PdfWriter()
         for i in range(start, end):
             writer.add_page(doc[i])
