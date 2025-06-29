@@ -35,19 +35,20 @@ if format_choice == "Custom":
     custom_format = st.sidebar.text_input("Custom format using: {IssueID}, {Location}, {Status}, {EquipmentID}",
                                           "{Status}_{IssueID}_{Location}")
 
-def detect_report_type(first_page_text):
-    if re.search(r"#\d+:", first_page_text):
-        return "ACC Build"
-    elif re.search(r"ID\s+\d+.*Location Detail", first_page_text):
-        return "BIM 360"
+def detect_report_type(doc):
+    for i in range(min(5, len(doc))):
+        text = doc[i].get_text()
+        if re.search(r"#\d+:", text):
+            return "ACC Build"
+        elif re.search(r"ID\s+\d+.*Location Detail", text):
+            return "BIM 360"
     return None
 
 def extract_entries_from_pdf(uploaded_pdf):
     doc = fitz.open(stream=uploaded_pdf.read(), filetype="pdf")
     segments = []
 
-    first_page_text = doc[0].get_text()
-    detected_type = detect_report_type(first_page_text) if auto_detect else report_type
+    detected_type = detect_report_type(doc) if auto_detect else report_type
 
     if not detected_type:
         st.warning("Could not detect report type. Please switch off auto-detect and choose manually.")
