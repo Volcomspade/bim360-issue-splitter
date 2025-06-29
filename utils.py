@@ -1,83 +1,73 @@
-from PyPDF2 import PdfReader, PdfWriter
-import re
 import io
 import zipfile
+import re
+import pandas as pd
+from PyPDF2 import PdfReader, PdfWriter
 
-
-def extract_entries_from_pdf(uploaded_file, auto_detect=False, format_choice=None, custom_format=None):
-    reader = PdfReader(uploaded_file)
+def extract_entries_from_pdf(file, auto_detect=True, format_choice="Custom", custom_format="{IssueID}_{Location}_{EquipmentID}"):
+    pdf = PdfReader(file)
+    doc = pdf.pages
     segments = []
-    doc = list(reader.pages)
 
-    # Determine report type by scanning first page
-    first_page_text = doc[0].extract_text()
-    is_acc = re.search(r"Issue\s+#?\d+", first_page_text)
-    is_bim360 = re.search(r"^Issue ID:\s+\d+", first_page_text, re.MULTILINE)
-
-    if is_acc:
-        report_type = "acc"
-    elif is_bim360:
-        report_type = "bim360"
-    else:
-        return None, []  # No valid type detected
-
-    # Parse page segments
     for i, page in enumerate(doc):
         text = page.extract_text()
+        if not text:
+            continue
 
-        if report_type == "bim360":
-            match = re.search(r"Issue ID:\s+(\d+)", text)
-            if match:
-                issue_id = match.group(1)
-                location = re.search(r"Location Detail:\s+(.*)", text)
-                status = re.search(r"Status:\s+(.*)", text)
-                equipment = re.search(r"Equipment ID:\s+(.*)", text)
-                segments.append({
-                    "entry_id": issue_id,
-                    "start": i,
-                    "location": location.group(1).strip() if location else "Unknown",
-                    "status": status.group(1).strip() if status else "Unknown",
-                    "equipment_id": equipment.group(1).strip() if equipment else "None"
-                })
+        if "Issue #" in text or re.search(r"Issue\s+#?\d+", text):
+            segments.append({"start": i, "text": text})
 
-        elif report_type == "acc":
-            match = re.search(r"Issue\s+#?(\d+)", text)
-            if match:
-                issue_id = match.group(1)
-                location = re.search(r"Location\s*\n(.*)", text)
-                status = re.search(r"Status\s*\n(.*)", text)
-                equipment = re.search(r"Equipment ID\s*\n(.*)", text)
-                segments.append({
-                    "entry_id": issue_id,
-                    "start": i,
-                    "location": location.group(1).strip() if location else "Unknown",
-                    "status": status.group(1).strip() if status else "Unknown",
-                    "equipment_id": equipment.group(1).strip() if equipment else "None"
-                })
+    if not segments:
+        return None, None
 
-    # Set end page for each segment
     for idx in range(len(segments)):
         segments[idx]["end"] = segments[idx + 1]["start"] if idx + 1 < len(doc) else len(doc)
 
-    # Create ZIP in memory
     zip_buffer = io.BytesIO()
-    zip_file = zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED)
+    zip_archive = zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED)
+
+    summary_data = []
 
     for seg in segments:
-        writer = PdfWriter()
-        for p in range(seg["start"], seg["end"]):
-            writer.add_page(doc[p])
+        text = seg["text"]
+        start, end = seg["start"], seg["end"]
 
-        # Filename format: Issue_###_Location.pdf
-        clean_loc = seg["location"].replace(" ", "_").replace("/", "-")
-        filename = f"Issue_{seg['entry_id']}_{clean_loc}.pdf"
+        issue_id_match = re.search(r"Issue\s+#?(\d+)", text)
+        location_match = re.search(r"Location\s+(.+?)(?:\n|$)", text)
+        equip_id_match = re.search(r"Equipment ID\s+(.+?)(?:\n|$)", text)
+        status_match = re.search(r"Status\s+(.+?)(?:\n|$)", text)
+
+        issue_id = issue_id_match.group(1).strip() if issue_id_match else "Unknown"
+        location = location_match.group(1).strip() if location_match else "Unknown"
+        equipment_id = equip_id_match.group(1).strip() if equip_id_match else "Unknown"
+        status = status_match.group(1).strip() if status_match else "Unknown"
+
+        filename = custom_format.format(
+            IssueID=issue_id,
+            Location=location.replace(" ", "_"),
+            EquipmentID=equipment_id,
+            Status=status
+        )
+
+        writer = PdfWriter()
+        for i in range(start, end):
+            writer.add_page(doc[i])
 
         pdf_bytes = io.BytesIO()
         writer.write(pdf_bytes)
         pdf_bytes.seek(0)
-        zip_file.writestr(filename, pdf_bytes.read())
 
-    zip_file.close()
+        zip_archive.writestr(f"{filename}.pdf", pdf_bytes.read())
+
+        summary_data.append({
+            "Issue ID": issue_id,
+            "Status": status,
+            "Location": location,
+            "Equipment ID": equipment_id
+        })
+
+    zip_archive.close()
     zip_buffer.seek(0)
 
-    return zip_buffer, segments
+    summary_df = pd.DataFrame(summary_data)
+    return zip_buffer, summary_df
