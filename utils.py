@@ -1,29 +1,26 @@
-import re
-from PyPDF2 import PdfReader, PdfWriter
 import io
+import re
 import zipfile
-import pandas as pd
+from PyPDF2 import PdfReader, PdfWriter
 
-def extract_entries_from_pdf(file):
+
+def extract_entries_from_pdf(file, format_choice="Custom", custom_format="{IssueID}_{LocationDetail}"):
     pdf = PdfReader(file)
     doc = pdf.pages
     segments = []
 
-    # Step 1: Identify segments
     for i, page in enumerate(doc):
         text = page.extract_text()
         if not text:
             continue
 
-        if "Issue #" in text or re.search(r"Issue\s+#?\d+", text):
-            segments.append({"start": i, "text": text})
-        elif re.match(r"#\d{3,}", text.splitlines()[0]):
+        # Detect segment starts by ID pattern (BIM 360 and ACC Build)
+        if re.search(r"Issue\s+#?\d+", text) or re.search(r"#\d+", text):
             segments.append({"start": i, "text": text})
 
     if not segments:
         return None, None
 
-    # Step 2: Assign end pages safely
     for idx in range(len(segments)):
         segments[idx]["end"] = segments[idx + 1]["start"] if idx + 1 < len(doc) else len(doc)
 
@@ -36,28 +33,28 @@ def extract_entries_from_pdf(file):
         text = seg["text"]
         start, end = seg["start"], seg["end"]
 
-        # Try both BIM 360 and ACC Build patterns
-        issue_id_match = (
-            re.search(r"Issue\s+#?(\d+)", text) or
-            re.match(r"#(\d+)", text.splitlines()[0])
-        )
-        location_match = (
-            re.search(r"Location Detail\s*:\s*(.+)", text) or
-            re.search(r"Location\s*:\s*(.+)", text)
-        )
+        # Extract Issue ID and Location info (handle both formats)
+        issue_id_match = re.search(r"Issue\s+#?(\d+)|#(\d+)", text)
+        location_match = re.search(r"Location\s*:\s*(.+?)\n", text)
 
-        issue_id = issue_id_match.group(1).strip() if issue_id_match else "Unknown"
-        location = location_match.group(1).strip().replace(" ", "_") if location_match else "Unknown"
+        issue_id = issue_id_match.group(1) if issue_id_match and issue_id_match.group(1) else issue_id_match.group(2) if issue_id_match else "Unknown"
+        location = location_match.group(1).strip() if location_match else "Unknown"
 
-        filename = f"{issue_id}_{location}.pdf"
+        # Format filename with user-defined format
+        try:
+            filename = custom_format.format(IssueID=issue_id, LocationDetail=location)
+        except KeyError:
+            filename = f"Issue_{issue_id or 'Unknown'}"
 
         writer = PdfWriter()
-        for p in range(start, end):
-            writer.add_page(doc[p])
+        for i in range(start, end):
+            writer.add_page(doc[i])
 
-        issue_buffer = io.BytesIO()
-        writer.write(issue_buffer)
-        zip_archive.writestr(filename, issue_buffer.getvalue())
+        pdf_bytes = io.BytesIO()
+        writer.write(pdf_bytes)
+        pdf_bytes.seek(0)
+
+        zip_archive.writestr(f"{filename}.pdf", pdf_bytes.read())
 
         summary_data.append({
             "Issue ID": issue_id,
@@ -67,6 +64,4 @@ def extract_entries_from_pdf(file):
 
     zip_archive.close()
     zip_buffer.seek(0)
-
-    df = pd.DataFrame(summary_data)
-    return df, zip_buffer
+    return summary_data, zip_buffer
