@@ -108,7 +108,7 @@ def extract_entries_from_pdf(uploaded_pdf):
         return None, None
 
     for idx in range(len(segments)):
-    segments[idx]["end"] = segments[idx + 1]["start"] if idx + 1 < len(segments) else len(doc)
+        segments[idx]["end"] = segments[idx + 1]["start"] if idx + 1 < len(segments) else len(doc)
 
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w") as zipf:
