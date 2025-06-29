@@ -3,7 +3,6 @@ import fitz  # PyMuPDF
 import zipfile
 import io
 import re
-from pathlib import Path
 
 st.set_page_config(page_title="BIM 360 Issue Report Splitter", page_icon="📄", layout="centered")
 
@@ -35,8 +34,8 @@ if format_choice == "Custom":
 
 def extract_entries_from_pdf(uploaded_pdf):
     doc = fitz.open(stream=uploaded_pdf.read(), filetype="pdf")
-
     segments = []
+
     for i in range(len(doc)):
         text = doc[i].get_text()
 
