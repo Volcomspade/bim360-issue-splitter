@@ -1,7 +1,8 @@
 
 import streamlit as st
 import datetime
-from utils import extract_entries_from_pdf, extract_bim360_entries, extract_acc_build_entries
+from utils import extract_entries_from_pdf, extract_bim360_entries, extract_acc_entries
+
 
 st.set_page_config(page_title="Issue Report Splitter", layout="centered")
 
