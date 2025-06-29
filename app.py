@@ -24,7 +24,7 @@ uploaded_file = st.file_uploader("Choose your BIM 360 or ACC Build issue report 
 
 if uploaded_file:
     with st.spinner("Processing PDF..."):
-        summary_data, zip_buffer = extract_entries_from_pdf(uploaded_file)
+        zip_buffer, summary_data = extract_entries_from_pdf(uploaded_file)
 
     if summary_data is None or zip_buffer is None:
         st.error("⚠️ No valid entries found. Check the report type or file contents.")
