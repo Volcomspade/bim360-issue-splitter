@@ -1,31 +1,65 @@
 
 import streamlit as st
-from datetime import datetime
-import pandas as pd
-from utils import extract_entries_from_pdf
+import datetime
+from utils import extract_entries_from_pdf, extract_bim360_entries, extract_acc_build_entries
 
 st.set_page_config(page_title="Issue Report Splitter", layout="centered")
 
-st.markdown("## 📄 Issue Report Splitter")
-st.write("Upload a BIM 360 or ACC Build issue report PDF to split each issue into its own file.")
+st.title("📄 Issue Report Splitter")
 
-uploaded_file = st.file_uploader("Choose a PDF report", type="pdf")
+uploaded_file = st.file_uploader("Upload a BIM 360 or ACC Build Issue Report PDF", type="pdf")
+
+report_type = None
+format_option = None
+zip_buffer = None
+summary_data = None
 
 if uploaded_file:
-    with st.spinner("Processing..."):
-        summary_data, zip_buffer = extract_entries_from_pdf(uploaded_file)
+    file_content = uploaded_file.read()
+    uploaded_file.seek(0)
 
-    if not summary_data or not zip_buffer:
-        st.error("❌ No valid entries found. Check the report type or file contents.")
-    else:
-        now = datetime.now().strftime("%Y-%m-%d")
-        zip_filename = f"Issue_Report_{now}.zip"
-        st.success(f"✅ {len(summary_data)} issues extracted!")
-        st.download_button(
-            label="📥 Download ZIP",
-            data=zip_buffer,
-            file_name=zip_filename,
-            mime="application/zip"
+    # Peek to determine type
+    sample_text = uploaded_file.getvalue().decode('latin1', errors='ignore')
+    if "Issue #" in sample_text or "Location Detail" in sample_text:
+        report_type = "BIM 360"
+    elif "#0" in sample_text or "Equipment ID" in sample_text:
+        report_type = "ACC Build"
+
+    st.success(f"Detected Report Type: {report_type}")
+
+    # Filename options based on type
+    if report_type == "BIM 360":
+        format_option = st.selectbox(
+            "Choose filename format",
+            ["Issue_{IssueID}_{LocationDetail}", "Issue_{IssueID}"]
         )
-        st.markdown("### 🧾 Summary")
-        st.dataframe(pd.DataFrame(summary_data))
+    elif report_type == "ACC Build":
+        format_option = st.selectbox(
+            "Choose filename format",
+            ["#{IssueID}_{EquipmentID}_{LocationDetail}", "#{IssueID}_{LocationDetail}"]
+        )
+
+    if st.button("Split Report"):
+        with st.spinner("Processing..."):
+            uploaded_file.seek(0)
+            if report_type == "BIM 360":
+                summary_data, zip_buffer = extract_bim360_entries(uploaded_file)
+            elif report_type == "ACC Build":
+                summary_data, zip_buffer = extract_acc_build_entries(uploaded_file)
+            else:
+                st.error("Could not detect report type.")
+
+        if summary_data:
+            st.success("✅ Report split successfully.")
+            st.dataframe(summary_data)
+
+            today = datetime.datetime.now().strftime("%Y-%m-%d")
+            st.download_button(
+                label="📦 Download ZIP",
+                data=zip_buffer,
+                file_name=f"Issue Report - {today}.zip",
+                mime="application/zip"
+            )
+        else:
+            st.error("❌ No issues found. Please check the file format.")
+
