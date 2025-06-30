@@ -1,51 +1,56 @@
-
 import streamlit as st
-import tempfile
+from utils import detect_report_type, extract_bim360_issues, extract_acc_issues, generate_filename
+import zipfile
 import os
-from datetime import datetime
-from utils import detect_report_type, extract_bim_issues, extract_acc_issues, generate_filename_options, save_issue_pdfs, zip_output_folder
+import tempfile
 
 st.set_page_config(page_title="Issue Report Splitter", layout="centered")
+
 st.title("📄 Issue Report Splitter")
 
-uploaded_file = st.file_uploader("Upload an Issue Report PDF", type=["pdf"])
+uploaded_file = st.file_uploader("Upload a PDF Report", type=["pdf"])
+filename_format = None
+field_order = []
 
 if uploaded_file:
-    with tempfile.TemporaryDirectory() as tmpdir:
-        input_path = os.path.join(tmpdir, uploaded_file.name)
-        with open(input_path, "wb") as f:
-            f.write(uploaded_file.read())
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+        tmp_file.write(uploaded_file.read())
+        temp_path = tmp_file.name
 
-        # Detect report type
-        report_type = detect_report_type(input_path)
-        st.markdown(f"**Detected Report Type:** `{report_type}`")
+    report_type = detect_report_type(temp_path)
+    st.success(f"Detected Report Type: {report_type}")
 
-        if report_type not in ["BIM 360", "ACC Build"]:
-            st.error("❌ Could not detect report type. Please ensure it's a valid BIM 360 or ACC Build issue report.")
-        else:
-            filename_fields = generate_filename_options(report_type)
-            selected_fields = st.multiselect("Select filename components (in order)", filename_fields, default=filename_fields)
-            filename_order = st.text_input("Enter field order separated by commas", value=",".join(selected_fields))
+    # Show filename format options
+    if report_type == "BIM 360":
+        fields = ["IssueID", "Location", "LocationDetail", "EquipmentID"]
+    elif report_type == "ACC Build":
+        fields = ["Issue#", "Location", "Title", "Status"]
+    else:
+        fields = []
 
-            if st.button("🔍 Process Report"):
-                ordered_fields = [f.strip() for f in filename_order.split(",") if f.strip() in filename_fields]
-                output_dir = os.path.join(tmpdir, "output")
-                os.makedirs(output_dir, exist_ok=True)
+    if fields:
+        filename_format = st.multiselect("Choose filename fields", fields, default=fields[:2])
+        order = st.text_input("Enter display order (comma-separated)", ",".join(map(str, range(1, len(filename_format)+1))))
+        try:
+            indices = [int(i.strip()) - 1 for i in order.split(",")]
+            field_order = [filename_format[i] for i in indices if 0 <= i < len(filename_format)]
+        except:
+            st.warning("⚠️ Invalid order format. Using default.")
 
-                try:
-                    if report_type == "BIM 360":
-                        issues = extract_bim_issues(input_path)
-                    else:
-                        issues = extract_acc_issues(input_path)
+    if st.button("Split and Download"):
+        with tempfile.TemporaryDirectory() as output_dir:
+            if report_type == "BIM 360":
+                files = extract_bim360_issues(temp_path, output_dir, field_order)
+            elif report_type == "ACC Build":
+                files = extract_acc_issues(temp_path, output_dir, field_order)
+            else:
+                st.error("Unsupported report type.")
+                st.stop()
 
-                    save_issue_pdfs(issues, output_dir, ordered_fields)
-                    zip_path = zip_output_folder(output_dir, prefix="Issue_Report")
-                    with open(zip_path, "rb") as f:
-                        st.download_button(
-                            label="📦 Download Split Reports ZIP",
-                            data=f,
-                            file_name=os.path.basename(zip_path),
-                            mime="application/zip"
-                        )
-                except Exception as e:
-                    st.error(f"❌ Error: {e}")
+            zip_path = os.path.join(output_dir, "issues.zip")
+            with zipfile.ZipFile(zip_path, "w") as zipf:
+                for file in files:
+                    zipf.write(file, os.path.basename(file))
+
+            with open(zip_path, "rb") as f:
+                st.download_button("📦 Download ZIP", f, file_name="issue_reports.zip")
