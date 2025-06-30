@@ -1,54 +1,102 @@
 
-import fitz
+import io
 import re
-from pathlib import Path
+from PyPDF2 import PdfReader, PdfWriter
 from zipfile import ZipFile
+from datetime import datetime
 
-def detect_report_type(text):
-    text = str(text).strip()
-    if "#01:" in text or "#1:" in text:
-        return "ACC Build"
-    elif "Issue detail" in text and "Location Detail" in text:
+def detect_report_type(file):
+    reader = PdfReader(file)
+    text = ""
+    for page in reader.pages[:3]:
+        text += page.extract_text() or ""
+    if "BIM 360" in text:
         return "BIM 360"
-    return "Unknown"
+    elif re.search(r"Issue\s+#\d+", text):
+        return "ACC Build"
+    return None
 
-def sanitize(text):
-    if not isinstance(text, str):
-        return "NA"
-    return re.sub(r"[^a-zA-Z0-9_\-]+", "_", text.strip())
+def get_available_fields(report_type):
+    if report_type == "BIM 360":
+        return ["IssueID", "Location", "LocationDetail", "EquipmentID"]
+    else:
+        return ["IssueNumber", "Description", "Status"]
 
-def construct_filename(fields: dict, format_order: list):
-    parts = [sanitize(fields.get(field, "")) for field in format_order]
-    return "_".join([part for part in parts if part])
+def extract_bim360_issues(file):
+    reader = PdfReader(file)
+    issues = []
+    issue_data = {}
+    current_id = None
 
-def process_uploaded_file(file_path, filename_format):
-    doc = fitz.open(file_path)
-    first_page = doc[0].get_text("text")
-    report_type = detect_report_type(first_page)
+    for i, page in enumerate(reader.pages):
+        text = page.extract_text()
+        match = re.search(r"Issue ID[:\s]+(\d+)", text)
+        if match:
+            if issue_data:
+                issues.append(issue_data)
+            current_id = match.group(1)
+            issue_data = {
+                "IssueID": current_id,
+                "Location": extract_field("Location", text),
+                "LocationDetail": extract_field("Location Detail", text),
+                "EquipmentID": extract_field("Equipment ID", text),
+                "pages": [i]
+            }
+        elif issue_data:
+            issue_data["pages"].append(i)
+    if issue_data:
+        issues.append(issue_data)
+    return issues
 
-    output_dir = Path("/tmp/split_issues")
-    output_dir.mkdir(parents=True, exist_ok=True)
+def extract_acc_build_issues(file):
+    reader = PdfReader(file)
+    text = ""
+    toc_end = 0
+    for i, page in enumerate(reader.pages[:5]):
+        text += page.extract_text() or ""
+        if "Table of Contents" in text:
+            toc_end = i + 1
+    issues = []
+    last_index = toc_end
+    for i in range(toc_end, len(reader.pages)):
+        page = reader.pages[i]
+        content = page.extract_text()
+        match = re.search(r"Issue\s+#(\d+)", content)
+        if match:
+            if last_index != i:
+                issues[-1]["pages"] = list(range(last_index, i))
+            issues.append({
+                "IssueNumber": match.group(1),
+                "Description": extract_field("Description", content),
+                "Status": extract_field("Status", content),
+                "pages": []
+            })
+            last_index = i
+    if issues:
+        issues[-1]["pages"] = list(range(last_index, len(reader.pages)))
+    return issues
 
-    summary = []
-    for i in range(0, len(doc), 2):
-        issue_text = doc[i].get_text("text")
-        fields = {
-            "Issue ID": f"#{i//2 + 1}",
-            "Location": "UnknownLoc",
-            "Location Detail": "NA",
-            "Equipment ID": "NA",
-            "Serial Number": "NA"
-        }
-        filename = construct_filename(fields, filename_format) + ".pdf"
-        issue_doc = fitz.open()
-        issue_doc.insert_pdf(doc, from_page=i, to_page=min(i+1, len(doc)-1))
-        issue_doc.save(output_dir / filename)
-        issue_doc.close()
-        summary.append(filename)
+def extract_field(field, text):
+    match = re.search(fr"{field}[:\s]+(.+?)(\n|$)", text)
+    return match.group(1).strip().replace(" ", "_") if match else "Unknown"
 
-    zip_path = output_dir.with_suffix(".zip")
-    with ZipFile(zip_path, "w") as zipf:
-        for f in output_dir.iterdir():
-            zipf.write(f, arcname=f.name)
+def zip_issue_pdfs(issues, fields, report_type):
+    zip_buffer = io.BytesIO()
+    zip_file = ZipFile(zip_buffer, "w")
 
-    return report_type, summary, zip_path
+    for issue in issues:
+        writer = PdfWriter()
+        filename_parts = []
+        for f in fields:
+            filename_parts.append(issue.get(f, "Unknown"))
+        filename = "_".join(filename_parts) + ".pdf"
+
+        for p in issue["pages"]:
+            writer.add_page(PdfReader(issue['pages'][0].pdf).pages[p])
+        pdf_buffer = io.BytesIO()
+        writer.write(pdf_buffer)
+        zip_file.writestr(filename, pdf_buffer.getvalue())
+
+    zip_file.close()
+    zip_buffer.seek(0)
+    return zip_buffer
