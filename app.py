@@ -1,34 +1,47 @@
 import streamlit as st
-import tempfile
+from utils import (
+    detect_report_type_from_pdf,
+    extract_bim360_issues_fixed,
+    extract_acc_build_issues
+)
+import os
 from pathlib import Path
-from utils import process_uploaded_file, get_filename_fields
+import shutil
+from zipfile import ZipFile
 
-st.set_page_config(page_title="Issue Report Splitter", layout="centered")
+st.set_page_config(page_title="Issue Splitter", layout="centered")
+st.title("🧩 BIM 360 / ACC Build Issue Splitter")
 
-st.title("📄 Issue Report Splitter")
-st.markdown("Upload a BIM 360 or ACC Build issue report PDF to split each issue into its own file.")
+uploaded_file = st.file_uploader("Upload a BIM 360 or ACC Build issue report PDF", type=["pdf"])
 
-uploaded_file = st.file_uploader("Choose a PDF report", type=["pdf"])
 if uploaded_file:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-        tmp.write(uploaded_file.read())
-        tmp_path = Path(tmp.name)
+    input_path = f"/mnt/data/input_{uploaded_file.name}"
+    with open(input_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
 
-    detected_type, filename_fields, preview_data = process_uploaded_file(tmp_path, detect_only=True)
+    report_type = detect_report_type_from_pdf(input_path)
+    st.info(f"Detected report type: **{report_type}**")
 
-    st.success(f"Detected Report Type: {detected_type}" if detected_type != "Unknown" else "Detected Report Type: Unknown")
+    out_dir = "/mnt/data/split_output"
+    if os.path.exists(out_dir):
+        shutil.rmtree(out_dir)
+    os.makedirs(out_dir, exist_ok=True)
 
-    field_order = []
-    if detected_type in ["BIM 360", "ACC Build"]:
-        field_options = get_filename_fields(detected_type)
-        selected_fields = st.multiselect("Choose fields for filename (drag to reorder):", options=field_options, default=field_options)
-        if selected_fields:
-            field_order = selected_fields
+    if report_type == "BIM 360":
+        files = extract_bim360_issues_fixed(input_path)
+    elif report_type == "ACC Build":
+        files = extract_acc_build_issues(input_path)
+    else:
+        st.error("Could not detect a valid report type. Make sure the report is BIM 360 or ACC Build.")
+        files = []
 
-    if st.button("Split Report") and field_order:
-        _, zip_path = process_uploaded_file(tmp_path, detected_type=detected_type, filename_fields=field_order)
-        if zip_path and zip_path.exists():
-            with open(zip_path, "rb") as f:
-                st.download_button("📦 Download Split Issues", f.read(), file_name=zip_path.name)
-        else:
-            st.error("Something went wrong while splitting the report.")
+    if files:
+        zip_path = "/mnt/data/Split_Issues.zip"
+        with ZipFile(zip_path, "w") as zipf:
+            for file in files:
+                zipf.write(file, arcname=os.path.basename(file))
+        st.success(f"✅ Split into {len(files)} issues.")
+        with open(zip_path, "rb") as f:
+            st.download_button("📦 Download ZIP", f, file_name="Split_Issues.zip", mime="application/zip")
+    else:
+        st.warning("No issues found.")
