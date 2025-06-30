@@ -1,6 +1,6 @@
 import streamlit as st
 from utils import (
-    detect_report_type_from_pdf,
+    detect_report_type,
     extract_bim360_issues_fixed,
     extract_acc_build_issues
 )
