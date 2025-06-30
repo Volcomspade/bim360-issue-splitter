@@ -1,8 +1,8 @@
 import streamlit as st
 from utils import (
     detect_report_type,
-    extract_bim360_issues_fixed,
-    extract_acc_build_issues
+    split_bim360_pdf,
+    split_acc_build_pdf
 )
 import os
 from pathlib import Path
@@ -27,11 +27,13 @@ if uploaded_file:
         shutil.rmtree(out_dir)
     os.makedirs(out_dir, exist_ok=True)
 
-    if report_type == "BIM 360":
-        files = extract_bim360_issues_fixed(input_path)
-    elif report_type == "ACC Build":
-        files = extract_acc_build_issues(input_path)
+   if detected_type == "BIM 360":
+        files = split_bim360_pdf(input_path, filename_format, output_dir)
+    elif detected_type == "ACC Build":
+        files = split_acc_build_pdf(input_path, filename_format, output_dir)
     else:
+    # Handle unknown type
+
         st.error("Could not detect a valid report type. Make sure the report is BIM 360 or ACC Build.")
         files = []
 
