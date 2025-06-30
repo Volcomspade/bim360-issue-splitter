@@ -1,59 +1,40 @@
 
 import streamlit as st
-from pathlib import Path
 from utils import process_uploaded_file, detect_report_type
-import zipfile
+from pathlib import Path
 
-st.set_page_config(page_title="Issue Report Splitter")
-
+st.set_page_config(page_title="Issue Report Splitter", layout="centered")
 st.title("📄 Issue Report Splitter")
-st.write("Upload a BIM 360 or ACC Build issue report PDF to split each issue into its own file.")
+st.caption("Upload a BIM 360 or ACC Build issue report PDF to split each issue into its own file.")
 
-uploaded_file = st.file_uploader("Choose a PDF report", type=["pdf"])
+uploaded_file = st.file_uploader("Choose a PDF report", type="pdf")
+
 if uploaded_file:
-    input_pdf_path = Path(f"/tmp/{uploaded_file.name}")
-    with open(input_pdf_path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
+    file_path = Path("/tmp") / uploaded_file.name
+    with open(file_path, "wb") as f:
+        f.write(uploaded_file.read())
 
-    first_page_text = detect_report_type(input_pdf_path)
-    detected_type, summary = "Unknown", []
+    with open(file_path, "rb") as f:
+        first_page_text = f.read(2048).decode("latin1", errors="ignore")
 
-    if "#1:" in first_page_text or "#01:" in first_page_text:
-        detected_type = "ACC Build"
-    elif "Issue ID:" in first_page_text:
-        detected_type = "BIM 360"
+    report_type = detect_report_type(first_page_text)
+    st.success(f"Detected Report Type: {report_type}")
 
-    st.success(f"Detected Report Type: {detected_type}")
-
-    filename_fields = []
-    if detected_type == "BIM 360":
-        filename_fields = ["IssueID", "Location", "LocationDetail", "EquipmentID"]
-    elif detected_type == "ACC Build":
-        filename_fields = ["Issue ID", "Location", "Location Detail", "Equipment ID"]
+    filename_options = []
+    if report_type == "BIM 360":
+        filename_options = ["Issue ID", "Location", "Location Detail", "Equipment ID"]
+    elif report_type == "ACC Build":
+        filename_options = ["Issue ID", "Location", "Serial Number"]
 
     selected_fields = st.multiselect(
-        "Choose fields for filename (drag to reorder):",
-        filename_fields,
-        default=filename_fields[:2]
+        "Choose fields for filename (drag to reorder):", options=filename_options, default=filename_options
     )
 
     if st.button("Split Report"):
-        output_dir = Path("/tmp/split_issues")
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        filename_format = "_".join(["{" + field + "}" for field in selected_fields])
-        detected_type, summary = process_uploaded_file(
-            input_pdf_path, detected_type, filename_format, output_dir
-        )
-
-        if summary:
-            zip_path = Path("/tmp/split_issues.zip")
-            with zipfile.ZipFile(zip_path, "w") as zipf:
-                for pdf_file in output_dir.glob("*.pdf"):
-                    zipf.write(pdf_file, arcname=pdf_file.name)
-
-            with open(zip_path, "rb") as f:
-                st.download_button("⬇️ Download Split Issues", f, file_name="split_issues.zip")
-
-        else:
-            st.error("No issues were extracted or split. Please check your PDF formatting.")
+        with st.spinner("Processing..."):
+            detected_type, summary, zip_path = process_uploaded_file(file_path, selected_fields)
+            if zip_path:
+                with open(zip_path, "rb") as f:
+                    st.download_button("⬇️ Download Split Issues", f, file_name=f"Issues_{detected_type.replace(' ', '_')}.zip")
+            else:
+                st.error("Failed to process the uploaded PDF.")

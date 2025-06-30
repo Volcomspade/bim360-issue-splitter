@@ -2,60 +2,53 @@
 import fitz
 import re
 from pathlib import Path
+from zipfile import ZipFile
+
+def detect_report_type(text):
+    text = str(text).strip()
+    if "#01:" in text or "#1:" in text:
+        return "ACC Build"
+    elif "Issue detail" in text and "Location Detail" in text:
+        return "BIM 360"
+    return "Unknown"
 
 def sanitize(text):
     if not isinstance(text, str):
         return "NA"
     return re.sub(r"[^a-zA-Z0-9_\-]+", "_", text.strip())
 
-def construct_filename(fields: dict, format_str: str) -> str:
-    return format_str.format(**{k: sanitize(fields.get(k, "")) for k in re.findall(r"{(.*?)}", format_str)})
+def construct_filename(fields: dict, format_order: list):
+    parts = [sanitize(fields.get(field, "")) for field in format_order]
+    return "_".join([part for part in parts if part])
 
-def detect_report_type(pdf_path):
-    doc = fitz.open(pdf_path)
-    first_page_text = doc[0].get_text()
-    return first_page_text
+def process_uploaded_file(file_path, filename_format):
+    doc = fitz.open(file_path)
+    first_page = doc[0].get_text("text")
+    report_type = detect_report_type(first_page)
 
-def process_uploaded_file(pdf_path, detected_type, filename_format, output_dir):
-    doc = fitz.open(pdf_path)
-    issue_starts = []
+    output_dir = Path("/tmp/split_issues")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     summary = []
-
-    for page_num in range(len(doc)):
-        text = doc[page_num].get_text()
-        match = re.search(r"#(\d+):", text)
-        if match:
-            issue_id = match.group(1)
-            issue_starts.append((int(issue_id), page_num))
-
-    issue_starts.sort(key=lambda x: x[1])
-
-    for idx, (issue_id, start_page) in enumerate(issue_starts):
-        end_page = issue_starts[idx + 1][1] - 1 if idx + 1 < len(issue_starts) else len(doc) - 1
-        issue_doc = fitz.open()
-        for i in range(start_page, end_page + 1):
-            issue_doc.insert_pdf(doc, from_page=i, to_page=i)
-
-        text = doc[start_page].get_text()
+    for i in range(0, len(doc), 2):
+        issue_text = doc[i].get_text("text")
         fields = {
-            "IssueID": issue_id,
-            "Issue ID": f"#{issue_id}",
-            "Location": re.search(r"Location\s*\n(.*?)\n", text),
-            "Location Detail": re.search(r"Location details\s*\n(.*?)\n", text),
-            "Equipment ID": re.search(r"Equipment ID\s*\n(.*?)\n", text)
+            "Issue ID": f"#{i//2 + 1}",
+            "Location": "UnknownLoc",
+            "Location Detail": "NA",
+            "Equipment ID": "NA",
+            "Serial Number": "NA"
         }
-
-        for k, v in fields.items():
-            if hasattr(v, 'group'):
-                fields[k] = v.group(1).strip()
-            elif isinstance(v, str):
-                fields[k] = v.strip()
-            else:
-                fields[k] = "NA"
-
         filename = construct_filename(fields, filename_format) + ".pdf"
+        issue_doc = fitz.open()
+        issue_doc.insert_pdf(doc, from_page=i, to_page=min(i+1, len(doc)-1))
         issue_doc.save(output_dir / filename)
         issue_doc.close()
-        summary.append(fields)
+        summary.append(filename)
 
-    return detected_type, summary
+    zip_path = output_dir.with_suffix(".zip")
+    with ZipFile(zip_path, "w") as zipf:
+        for f in output_dir.iterdir():
+            zipf.write(f, arcname=f.name)
+
+    return report_type, summary, zip_path
