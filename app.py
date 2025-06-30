@@ -1,40 +1,34 @@
-
 import streamlit as st
-from utils import process_uploaded_file, detect_report_type
+import tempfile
 from pathlib import Path
+from utils import process_uploaded_file, get_filename_fields
 
 st.set_page_config(page_title="Issue Report Splitter", layout="centered")
+
 st.title("📄 Issue Report Splitter")
-st.caption("Upload a BIM 360 or ACC Build issue report PDF to split each issue into its own file.")
+st.markdown("Upload a BIM 360 or ACC Build issue report PDF to split each issue into its own file.")
 
-uploaded_file = st.file_uploader("Choose a PDF report", type="pdf")
-
+uploaded_file = st.file_uploader("Choose a PDF report", type=["pdf"])
 if uploaded_file:
-    file_path = Path("/tmp") / uploaded_file.name
-    with open(file_path, "wb") as f:
-        f.write(uploaded_file.read())
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        tmp.write(uploaded_file.read())
+        tmp_path = Path(tmp.name)
 
-    with open(file_path, "rb") as f:
-        first_page_text = f.read(2048).decode("latin1", errors="ignore")
+    detected_type, filename_fields, preview_data = process_uploaded_file(tmp_path, detect_only=True)
 
-    report_type = detect_report_type(first_page_text)
-    st.success(f"Detected Report Type: {report_type}")
+    st.success(f"Detected Report Type: {detected_type}" if detected_type != "Unknown" else "Detected Report Type: Unknown")
 
-    filename_options = []
-    if report_type == "BIM 360":
-        filename_options = ["Issue ID", "Location", "Location Detail", "Equipment ID"]
-    elif report_type == "ACC Build":
-        filename_options = ["Issue ID", "Location", "Serial Number"]
+    field_order = []
+    if detected_type in ["BIM 360", "ACC Build"]:
+        field_options = get_filename_fields(detected_type)
+        selected_fields = st.multiselect("Choose fields for filename (drag to reorder):", options=field_options, default=field_options)
+        if selected_fields:
+            field_order = selected_fields
 
-    selected_fields = st.multiselect(
-        "Choose fields for filename (drag to reorder):", options=filename_options, default=filename_options
-    )
-
-    if st.button("Split Report"):
-        with st.spinner("Processing..."):
-            detected_type, summary, zip_path = process_uploaded_file(file_path, selected_fields)
-            if zip_path:
-                with open(zip_path, "rb") as f:
-                    st.download_button("⬇️ Download Split Issues", f, file_name=f"Issues_{detected_type.replace(' ', '_')}.zip")
-            else:
-                st.error("Failed to process the uploaded PDF.")
+    if st.button("Split Report") and field_order:
+        _, zip_path = process_uploaded_file(tmp_path, detected_type=detected_type, filename_fields=field_order)
+        if zip_path and zip_path.exists():
+            with open(zip_path, "rb") as f:
+                st.download_button("📦 Download Split Issues", f.read(), file_name=zip_path.name)
+        else:
+            st.error("Something went wrong while splitting the report.")
