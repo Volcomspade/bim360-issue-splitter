@@ -1,141 +1,120 @@
-import fitz  # PyMuPDF
+import fitz
+import os
 import re
+import io
 import zipfile
-from io import BytesIO
+from datetime import datetime
+from pathlib import Path
 
-def split_bim360_report(pdf_file, filename_format="{IssueID}_{Location}_{LocationDetail}_{EquipmentID}"):
-    doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
-    output_files = []
-    summary = []
+def construct_filename(fields: dict, format_str: str):
+    return format_str.format(**{k: sanitize(fields.get(k, "")) for k in fields})
 
-    page = 2  # Skip cover and TOC
-    while page < len(doc):
-        text = doc[page].get_text()
-        lines = text.splitlines()
+def sanitize(text):
+    return re.sub(r'[^a-zA-Z0-9_\-]+', '_', text.strip())
 
-        issue_id = None
-        location = None
-        location_detail = None
-        equipment_id = "NoEquipment"
+def detect_report_type(first_page_text):
+    if "#1:" in first_page_text or "#01:" in first_page_text:
+        return "ACC Build"
+    elif "Issue ID" in first_page_text:
+        return "BIM 360"
+    return "Unknown"
 
-        for idx, line in enumerate(lines):
-            if line.startswith("ID ") and len(line.strip().split()) == 2:
-                issue_id = line.strip().split()[1]
-            if "Location" in line and idx + 1 < len(lines):
-                location = lines[idx + 1].strip()
-            if "Location Detail" in line and idx + 1 < len(lines):
-                location_detail = lines[idx + 1].strip()
-            if "Equipment" in line or "LTR" in line:
-                eq_match = re.search(r'\b([A-Z0-9\-]{6,})\b', line)
-                if eq_match:
-                    equipment_id = eq_match.group(1)
-
-        if issue_id:
-            start_page = page
-            end_page = page
-            while end_page + 1 < len(doc):
-                next_text = doc[end_page + 1].get_text()
-                if f"ID {issue_id}" in next_text:
-                    end_page += 1
-                else:
-                    break
-
-            split_doc = fitz.open()
-            for i in range(start_page, end_page + 1):
-                split_doc.insert_pdf(doc, from_page=i, to_page=i)
-
-            buffer = BytesIO()
-            split_doc.save(buffer)
-
-            safe_location = (location or "NoLocation").replace(">", "").replace(":", "").replace("/", "").strip()
-            safe_detail = (location_detail or "NoDetail").replace(">", "").replace(":", "").replace("/", "").strip()
-
-            filename = filename_format.format(
-                IssueID=issue_id,
-                Location=safe_location,
-                LocationDetail=safe_detail,
-                EquipmentID=equipment_id
-            ).strip() + ".pdf"
-
-            output_files.append((filename, buffer))
-            summary.append({
-                "Issue ID": issue_id,
-                "Location": location or "N/A",
-                "Location Detail": location_detail or "N/A",
-                "Equipment ID": equipment_id,
-                "Pages": f"{start_page+1}-{end_page+1}"
-            })
-
-            page = end_page + 1
-        else:
-            page += 1
-
-    return output_files, summary
-
-
-def split_acc_build_report(pdf_file, filename_format="{IssueNumber}_{Location}_{LocationDetail}_{EquipmentID}"):
-    doc = fitz.open(stream=pdf_file.read(), filetype="pdf")
-    output_files = []
-    summary = []
-
-    # Find start of first issue after TOC
-    start_page = 0
-    for i in range(min(10, len(doc))):
-        if "#1" in doc[i].get_text():
-            start_page = i
-            break
-
-    issue_starts = []
-    for i in range(start_page, len(doc)):
-        text = doc[i].get_text()
-        match = re.match(r"#(\d+)", text.strip().splitlines()[0])
-        if match:
-            issue_starts.append((i, int(match.group(1))))
-
-    for idx, (pg, issue_num) in enumerate(issue_starts):
-        end_pg = issue_starts[idx + 1][0] - 1 if idx + 1 < len(issue_starts) else len(doc) - 1
-        pages = range(pg, end_pg + 1)
-
-        location = None
-        location_detail = None
-        equipment_id = "NoEquipment"
-
-        all_text = " ".join(doc[p].get_text() for p in pages)
-        loc_match = re.search(r"Location\s*\n(.+?)\n", all_text)
-        det_match = re.search(r"Location Detail\s*\n(.+?)\n", all_text)
-        eq_match = re.search(r'\b([A-Z0-9\-]{6,})\b', all_text)
-
-        if loc_match:
-            location = loc_match.group(1).strip()
-        if det_match:
-            location_detail = det_match.group(1).strip()
-        if eq_match:
-            equipment_id = eq_match.group(1)
-
-        split_doc = fitz.open()
-        for p in pages:
-            split_doc.insert_pdf(doc, from_page=p, to_page=p)
-
-        buffer = BytesIO()
-        split_doc.save(buffer)
-
-        safe_location = (location or "NoLocation").replace(">", "").replace(":", "").replace("/", "").strip()
-        safe_detail = (location_detail or "NoDetail").replace(">", "").replace(":", "").replace("/", "").strip()
-
-        filename = filename_format.format(
-            IssueNumber=str(issue_num).zfill(3),
-            Location=safe_location,
-            LocationDetail=safe_detail,
-            EquipmentID=equipment_id
-        ).strip() + ".pdf"
-
-        output_files.append((filename, buffer))
-        summary.append({
-            "Issue #": issue_num,
-            "Location": location or "N/A",
-            "Location Detail": location_detail or "N/A",
-            "Equipment ID": equipment_id,
-            "Pages": f"{pages.start + 1}-{pages.stop}"
+def extract_toc_from_acc(doc):
+    toc_text = doc[1].get_text()
+    pattern = re.compile(r"#(\d+):\s+(.+?)\.+\s+(\d+)")
+    matches = pattern.findall(toc_text)
+    toc_entries = []
+    for i, (issue_id, title, start_page) in enumerate(matches):
+        start_page = int(start_page)
+        end_page = int(matches[i + 1][2]) - 1 if i + 1 < len(matches) else len(doc) - 1
+        toc_entries.append({
+            "IssueID": issue_id,
+            "Title": title.strip(),
+            "StartPage": start_page,
+            "EndPage": end_page
         })
+    return toc_entries
 
-    return output_files, summary
+def extract_metadata_from_bim(page_text):
+    data = {
+        "IssueID": "",
+        "Title": "",
+        "Location": "",
+        "LocationDetail": "",
+        "EquipmentID": "",
+        "Status": ""
+    }
+    patterns = {
+        "IssueID": r"Issue ID\s*([\d]+)",
+        "Location": r"Location\s*([\w\- ]+)",
+        "LocationDetail": r"Location Detail\s*([\w\- ]+)",
+        "EquipmentID": r"Equipment ID\s*([\w\-]+)",
+        "Status": r"Status\s*([\w ]+)"
+    }
+    for key, pat in patterns.items():
+        match = re.search(pat, page_text)
+        if match:
+            data[key] = match.group(1).strip()
+    return data
+
+def split_bim360_pdf(doc, filename_format, output_dir):
+    issue_starts = []
+    for i, page in enumerate(doc):
+        text = page.get_text()
+        if "Issue ID" in text:
+            issue_starts.append((i, extract_metadata_from_bim(text)))
+    issue_starts.append((len(doc), None))  # add end
+
+    summary = []
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for i in range(len(issue_starts) - 1):
+        start, metadata = issue_starts[i]
+        end = issue_starts[i + 1][0] - 1
+        issue_doc = fitz.open()
+        for j in range(start, end + 1):
+            issue_doc.insert_pdf(doc, from_page=j, to_page=j)
+        filename = construct_filename(metadata, filename_format) + ".pdf"
+        issue_doc.save(output_dir / filename)
+        issue_doc.close()
+        summary.append({**metadata, "StartPage": start, "EndPage": end})
+    return summary
+
+def split_acc_build_pdf(doc, filename_format, output_dir):
+    toc_entries = extract_toc_from_acc(doc)
+    summary = []
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for entry in toc_entries:
+        issue_doc = fitz.open()
+        for i in range(entry["StartPage"], entry["EndPage"] + 1):
+            issue_doc.insert_pdf(doc, from_page=i, to_page=i)
+        filename = construct_filename(entry, filename_format) + ".pdf"
+        issue_doc.save(output_dir / filename)
+        issue_doc.close()
+        summary.append(entry)
+    return summary
+
+def process_uploaded_file(file_bytes, report_type, filename_format):
+    doc = fitz.open(stream=file_bytes, filetype="pdf")
+    first_page_text = doc[0].get_text()
+    detected_type = detect_report_type(first_page_text) if report_type == "Auto Detect" else report_type
+
+    output_dir = Path("/tmp/split_issues")
+    if output_dir.exists():
+        for f in output_dir.glob("*.pdf"):
+            f.unlink()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if detected_type == "BIM 360":
+        summary = split_bim360_pdf(doc, filename_format, output_dir)
+    elif detected_type == "ACC Build":
+        summary = split_acc_build_pdf(doc, filename_format, output_dir)
+    else:
+        return "Unknown", [], None
+
+    # Create zip
+    zip_path = f"/tmp/Issue_Report_{datetime.now().strftime('%Y%m%d%H%M%S')}.zip"
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        for file in output_dir.glob("*.pdf"):
+            zipf.write(file, arcname=file.name)
+
+    return detected_type, summary, zip_path
