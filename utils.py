@@ -1,56 +1,61 @@
-import fitz  # PyMuPDF
+
 from PyPDF2 import PdfReader, PdfWriter
-from io import BytesIO
+import io
 import re
 
-def detect_report_type(file_bytes):
-    try:
-        pdf = PdfReader(BytesIO(file_bytes))
-        first_page_text = pdf.pages[0].extract_text()
-        if "Issue ID" in first_page_text:
-            return "bim360"
-    except:
-        pass
-    return "unknown"
+def detect_report_type(filepath):
+    reader = PdfReader(filepath)
+    text = reader.pages[0].extract_text()
+    if "Issue ID:" in text:
+        return "BIM 360"
+    return "Unknown"
 
-def extract_bim360_issues(file_bytes, filename_option="{IssueID}_{Location}"):
-    pdf = PdfReader(BytesIO(file_bytes))
-    issues = {}
-    issue_starts = []
+def extract_bim_issues(filepath):
+    reader = PdfReader(filepath)
+    pages = reader.pages
+    issues = []
+    current_issue = {}
+    buffer = PdfWriter()
+    issue_id_pattern = re.compile(r"Issue ID: (\d+)")
 
-    for i, page in enumerate(pdf.pages):
-        text = page.extract_text() or ""
-        if "Issue ID:" in text:
-            match = re.search(r"Issue ID:\s*(\d+)", text)
-            if match:
-                issue_id = match.group(1)
-                issue_starts.append((i, issue_id))
+    for i, page in enumerate(pages):
+        text = page.extract_text()
+        match = issue_id_pattern.search(text)
+        if match:
+            if current_issue:
+                pdf_bytes = io.BytesIO()
+                buffer.write(pdf_bytes)
+                current_issue["pdf"] = pdf_bytes
+                issues.append(current_issue)
+                buffer = PdfWriter()
+            current_issue = {
+                "IssueID": match.group(1),
+                "Location": extract_field(text, "Location:"),
+                "LocationDetail": extract_field(text, "Location Detail:"),
+                "EquipmentID": extract_field(text, "Equipment ID:")
+            }
+        if current_issue:
+            buffer.add_page(page)
 
-    for idx, (start_page, issue_id) in enumerate(issue_starts):
-        end_page = issue_starts[idx + 1][0] if idx + 1 < len(issue_starts) else len(pdf.pages)
-        writer = PdfWriter()
-        location = location_detail = equipment_id = "Unknown"
-
-        for i in range(start_page, end_page):
-            writer.add_page(pdf.pages[i])
-            if i == start_page:
-                text = pdf.pages[i].extract_text() or ""
-                location_match = re.search(r"Location:\s*(.+)", text)
-                detail_match = re.search(r"Location Detail:\s*(.+)", text)
-                equip_match = re.search(r"Equipment ID:\s*(.+)", text)
-                if location_match: location = location_match.group(1).strip()
-                if detail_match: location_detail = detail_match.group(1).strip()
-                if equip_match: equipment_id = equip_match.group(1).strip()
-
-        filename = filename_option.format(
-            IssueID=issue_id,
-            Location=location.replace("/", "_"),
-            LocationDetail=location_detail.replace("/", "_"),
-            EquipmentID=equipment_id.replace("/", "_")
-        )
-
-        pdf_buffer = BytesIO()
-        writer.write(pdf_buffer)
-        issues[filename] = pdf_buffer.getvalue()
+    if current_issue:
+        pdf_bytes = io.BytesIO()
+        buffer.write(pdf_bytes)
+        current_issue["pdf"] = pdf_bytes
+        issues.append(current_issue)
 
     return issues
+
+def extract_field(text, label):
+    try:
+        value = text.split(label, 1)[1].split("\n")[0].strip()
+        return re.sub(r'[\\/:*?"<>|]', "_", value)
+    except:
+        return "Unknown"
+
+def format_bim_filename(issue, format_str):
+    return format_str.format(
+        IssueID=issue.get("IssueID", "NA"),
+        Location=issue.get("Location", "NA"),
+        LocationDetail=issue.get("LocationDetail", "NA"),
+        EquipmentID=issue.get("EquipmentID", "NA")
+    )
