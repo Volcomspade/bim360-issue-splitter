@@ -1,61 +1,57 @@
 
-from PyPDF2 import PdfReader, PdfWriter
-import io
+import fitz  # PyMuPDF
 import re
 
-def detect_report_type(filepath):
-    reader = PdfReader(filepath)
-    text = reader.pages[0].extract_text()
-    if "Issue ID:" in text:
-        return "BIM 360"
-    return "Unknown"
+def detect_report_type(pdf_path):
+    doc = fitz.open(pdf_path)
+    first_page = doc[0].get_text()
+    if "Issue ID" in first_page and "Location" in first_page:
+        return "bim360"
+    return "unknown"
 
-def extract_bim_issues(filepath):
-    reader = PdfReader(filepath)
-    pages = reader.pages
+def extract_issues_bim360(pdf_path):
+    doc = fitz.open(pdf_path)
     issues = []
-    current_issue = {}
-    buffer = PdfWriter()
-    issue_id_pattern = re.compile(r"Issue ID: (\d+)")
+    toc_pages = 2  # Skip cover + TOC
 
-    for i, page in enumerate(pages):
-        text = page.extract_text()
-        match = issue_id_pattern.search(text)
+    i = toc_pages
+    while i < len(doc):
+        page_text = doc[i].get_text()
+        match = re.search(r"Issue ID\s*([\w-]+)", page_text)
         if match:
-            if current_issue:
-                pdf_bytes = io.BytesIO()
-                buffer.write(pdf_bytes)
-                current_issue["pdf"] = pdf_bytes
-                issues.append(current_issue)
-                buffer = PdfWriter()
-            current_issue = {
-                "IssueID": match.group(1),
-                "Location": extract_field(text, "Location:"),
-                "LocationDetail": extract_field(text, "Location Detail:"),
-                "EquipmentID": extract_field(text, "Equipment ID:")
-            }
-        if current_issue:
-            buffer.add_page(page)
-
-    if current_issue:
-        pdf_bytes = io.BytesIO()
-        buffer.write(pdf_bytes)
-        current_issue["pdf"] = pdf_bytes
-        issues.append(current_issue)
-
+            issue_id = match.group(1)
+            issue_pages = [doc[i]]
+            j = i + 1
+            while j < len(doc) and not re.search(r"Issue ID\s*([\w-]+)", doc[j].get_text()):
+                issue_pages.append(doc[j])
+                j += 1
+            issues.append({
+                "id": issue_id,
+                "pages": issue_pages,
+                "Location": extract_field("Location", page_text),
+                "LocationDetail": extract_field("Location Detail", page_text),
+                "EquipmentID": extract_field("Equipment ID", page_text),
+            })
+            i = j
+        else:
+            i += 1
     return issues
 
-def extract_field(text, label):
-    try:
-        value = text.split(label, 1)[1].split("\n")[0].strip()
-        return re.sub(r'[\\/:*?"<>|]', "_", value)
-    except:
-        return "Unknown"
+def extract_field(label, text):
+    pattern = rf"{label}\s*[:\-]?\s*(.*)"
+    match = re.search(pattern, text)
+    if match:
+        return match.group(1).strip().splitlines()[0]
+    return ""
 
-def format_bim_filename(issue, format_str):
-    return format_str.format(
-        IssueID=issue.get("IssueID", "NA"),
-        Location=issue.get("Location", "NA"),
-        LocationDetail=issue.get("LocationDetail", "NA"),
-        EquipmentID=issue.get("EquipmentID", "NA")
-    )
+def build_filename_bim360(issue, fields):
+    values = [issue.get(field, "NA").replace("/", "-").strip() for field in fields]
+    return "_".join(values)
+
+def save_issue_pdfs(pages, filename, folder):
+    pdf_path = f"{folder}/{filename}.pdf"
+    new_doc = fitz.open()
+    for page in pages:
+        new_doc.insert_pdf(page.parent, from_page=page.number, to_page=page.number)
+    new_doc.save(pdf_path)
+    new_doc.close()
